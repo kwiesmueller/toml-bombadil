@@ -1,4 +1,5 @@
 use self::settings::profiles::Profile;
+use crate::conflict::{Conflict, ConflictContext, ConflictResolution, ConflictStrategy};
 use crate::dots::{DotVar, LinkResult};
 use crate::gpg::Gpg;
 use crate::hook::Hook;
@@ -28,6 +29,7 @@ use watchexec::{
 };
 use watchexec_filterer_ignore::IgnoreFilterer;
 
+pub mod conflict;
 mod dots;
 mod error;
 mod git;
@@ -145,6 +147,11 @@ impl Bombadil {
     /// 5. Run post install hooks
     /// 6. Write current state to `.dot/previous_state.toml`
     pub fn install(&self) -> Result<()> {
+        self.install_with_strategy(ConflictStrategy::Interactive)
+    }
+
+    /// Install dotfiles with a specific conflict resolution strategy
+    pub fn install_with_strategy(&self, strategy: ConflictStrategy) -> Result<()> {
         self.check_dotfile_dir()?;
 
         self.prehooks.iter().map(Hook::run).for_each(|result| {
@@ -153,6 +160,9 @@ impl Bombadil {
             }
         });
         let dot_copy_dir = &self.path.join(".dots");
+
+        // Conflict resolution context
+        let mut conflict_ctx = ConflictContext::new(strategy);
 
         // Render current settings and create symlinks
         fs::create_dir_all(dot_copy_dir)?;
@@ -195,8 +205,73 @@ impl Bombadil {
                 }
             }
 
-            dot.symlink()?;
+            // Check for conflicts before symlinking
+            let copy_path = match dot.copy_path() {
+                Ok(p) => p,
+                Err(_) => {
+                    // If we can't get the copy path, just try to symlink anyway
+                    dot.symlink()?;
+                    continue;
+                }
+            };
+            let target = match dot.target() {
+                Ok(t) => t,
+                Err(_) => {
+                    dot.symlink()?;
+                    continue;
+                }
+            };
+            let source = match dot.source() {
+                Ok(s) => s,
+                Err(_) => {
+                    dot.symlink()?;
+                    continue;
+                }
+            };
+
+            // Detect conflict
+            match Conflict::detect(key, &copy_path, &target, &source) {
+                Ok(Some(conflict)) => {
+                    let resolution = conflict_ctx.resolve(&conflict)?;
+
+                    match resolution {
+                        ConflictResolution::UseDotfile | ConflictResolution::UseDotfileForAll => {
+                            // Backup and proceed with symlink
+                            crate::paths::backup_and_unlink(&target)?;
+                            dot.symlink()?;
+                        }
+                        ConflictResolution::UseSystem | ConflictResolution::UseSystemForAll => {
+                            // Copy system content back to dotfile source
+                            conflict.apply_use_system()?;
+                            // Re-render the dot with updated source
+                            let _ = dot.install(
+                                &self.vars,
+                                self.get_auto_ignored_files(key),
+                                self.profile_enabled.as_slice(),
+                            );
+                            // Now symlink (target content now matches)
+                            crate::paths::backup_and_unlink(&target)?;
+                            dot.symlink()?;
+                        }
+                        ConflictResolution::Skip | ConflictResolution::SkipAll => {
+                            println!("  {} Skipping: {}", "→".yellow(), target.display());
+                            // Don't symlink, leave system file as-is
+                        }
+                    }
+                }
+                Ok(None) => {
+                    // No conflict, proceed normally
+                    dot.symlink()?;
+                }
+                Err(e) => {
+                    eprintln!("Error detecting conflict for {}: {}", key, e);
+                    dot.symlink()?;
+                }
+            }
         }
+
+        // Print conflict summary
+        conflict_ctx.print_summary();
 
         // Run post install hooks
         self.posthooks.iter().map(Hook::run).for_each(|result| {

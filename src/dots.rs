@@ -344,7 +344,7 @@ mod tests {
         // Assert
         let symlink = PathBuf::from(".config/template.css");
         assert_that!(symlink.is_symlink()).is_true();
-        assert_that!(fs::read_to_string(symlink)?).is_equal_to(&"Hello Tom\n".to_string());
+        assert_that!(fs::read_to_string(symlink)?).is_equal_to("Hello Tom\n".to_string());
 
         Ok(())
     }
@@ -373,11 +373,11 @@ mod tests {
         // Assert
         let symlink = PathBuf::from(".config/template.css");
         assert_that!(symlink.is_symlink()).is_true();
-        assert_that!(fs::read_to_string(symlink)?).is_equal_to(&"Hello Tom\n".to_string());
+        assert_that!(fs::read_to_string(symlink)?).is_equal_to("Hello Tom\n".to_string());
         assert_that!(hard_copy).exists();
         assert_that!(hard_copy.is_symlink()).is_false();
         assert_that!(fs::read_to_string(hard_copy.clone())?)
-            .is_equal_to(&"Hello Tom\n".to_string());
+            .is_equal_to("Hello Tom\n".to_string());
 
         let hard_copy_permissions = hard_copy.symlink_metadata().unwrap().permissions();
         assert_that!(hard_copy_permissions.mode() & 0o777).is_equal_to(0o555);
@@ -415,8 +415,8 @@ mod tests {
             PathBuf::from("dotfiles_with_multiple_nested_dir/.dots/dir/subdir_two/subfile");
         assert_that!(file_one).exists();
         assert_that!(file_two).exists();
-        assert_that!(fs::read_to_string(file_one)?).is_equal_to(&"Hello From subdir 1".to_string());
-        assert_that!(fs::read_to_string(file_two)?).is_equal_to(&"Hello From subdir 2".to_string());
+        assert_that!(fs::read_to_string(file_one)?).is_equal_to("Hello From subdir 1".to_string());
+        assert_that!(fs::read_to_string(file_two)?).is_equal_to("Hello From subdir 2".to_string());
         Ok(())
     }
 
@@ -488,13 +488,13 @@ mod tests {
 
         let file_content = fs::read_to_string(".dots/source_dot/file")?;
 
-        assert_that!(file_content).is_equal_to(&"Hello Tom\n".to_string());
+        assert_that!(file_content).is_equal_to("Hello Tom\n".to_string());
         assert_that!(PathBuf::from(".dots/source_dot/subdir_one")).exists();
         assert_that!(PathBuf::from(".dots/source_dot/subdir_two")).exists();
 
         let file_content = fs::read_to_string(".dots/source_dot/subdir_two/subfile")?;
 
-        assert_that!(file_content).is_equal_to(&"Hello From subdir 2\n".to_string());
+        assert_that!(file_content).is_equal_to("Hello From subdir 2\n".to_string());
         assert_that!(PathBuf::from(".dots/file.md")).does_not_exist();
         assert_that!(PathBuf::from(".dots/subdir_two/subfile.md")).does_not_exist();
         Ok(())
@@ -579,7 +579,7 @@ mod tests {
 
         // Assert
         assert_that!(dot).exists();
-        assert_that!(fs::read_to_string(dot)?).is_equal_to(&"Hello Tom Bombadil\n".to_string());
+        assert_that!(fs::read_to_string(dot)?).is_equal_to("Hello Tom Bombadil\n".to_string());
         Ok(())
     }
 
@@ -592,7 +592,7 @@ mod tests {
         assert_that!(dotfiles.vars).is_equal_to(PathBuf::from("vars.toml"));
 
         let content = fs::read_to_string("dotfiles_with_local_vars/.dots/sub_dir/template")?;
-        assert_that!(content).is_equal_to(&"Golberry is singing".to_string());
+        assert_that!(content).is_equal_to("Golberry is singing".to_string());
         Ok(())
     }
 
@@ -616,7 +616,7 @@ mod tests {
         dot.install(&Variables::default(), vec![], &[])?;
 
         let content = fs::read_to_string(".dots/dir/template")?;
-        assert_that!(content).is_equal_to(&"Hello Tom\n".to_string());
+        assert_that!(content).is_equal_to("Hello Tom\n".to_string());
 
         Ok(())
     }

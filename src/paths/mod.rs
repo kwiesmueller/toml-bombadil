@@ -193,6 +193,16 @@ impl DotPaths for Dot {
     }
 }
 
+/// Backup a file and then unlink it (public interface for conflict resolution)
+pub fn backup_and_unlink(target: &Path) -> Result<()> {
+    if target.exists() && !target.is_symlink() {
+        move_original_to_backup(target)?;
+    } else if target.exists() {
+        unlink(target)?;
+    }
+    Ok(())
+}
+
 fn move_original_to_backup(target: &Path) -> Result<()> {
     let target_as_non_absolute = if target.is_absolute() {
         target.strip_prefix("/").unwrap()

@@ -6,6 +6,7 @@ use std::io;
 use std::io::BufRead;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
+use toml_bombadil::conflict::ConflictStrategy;
 use toml_bombadil::settings::profiles;
 use toml_bombadil::{Bombadil, MetadataType, Mode};
 
@@ -15,6 +16,10 @@ macro_rules! fatal {
         writeln!(&mut ::std::io::stderr(), $($tt)*).unwrap();
         ::std::process::exit(1)
     }}
+}
+
+fn parse_strategy(s: &str) -> Result<ConflictStrategy, String> {
+    s.parse()
 }
 
 /// Toml is a dotfile template manager, written in rust.
@@ -48,6 +53,14 @@ enum Cli {
         /// A list of comma separated profiles to activate
         #[clap(short, long, required = false, value_parser = profiles(), num_args(0..))]
         profiles: Vec<String>,
+
+        /// Force overwrite conflicts (dotfile always wins, system files backed up)
+        #[clap(short, long)]
+        force: bool,
+
+        /// Conflict resolution strategy: interactive (default), dotfile-wins, system-wins, skip
+        #[clap(long, value_parser = parse_strategy)]
+        strategy: Option<ConflictStrategy>,
     },
     /// Remove all symlinks defined in your bombadil.toml
     Unlink,
@@ -121,7 +134,11 @@ async fn main() -> Result<()> {
             Bombadil::install_from_remote(&remote, path, profiles)
                 .unwrap_or_else(|err| fatal!("{}", err));
         }
-        Cli::Link { profiles } => {
+        Cli::Link {
+            profiles,
+            force,
+            strategy,
+        } => {
             let mut bombadil =
                 Bombadil::from_settings(Mode::Gpg).unwrap_or_else(|err| fatal!("{}", err));
 
@@ -129,7 +146,16 @@ async fn main() -> Result<()> {
                 .enable_profiles(profiles.iter().map(String::as_str).collect())
                 .unwrap_or_else(|err| fatal!("{}", err));
 
-            bombadil.install().unwrap_or_else(|err| fatal!("{}", err));
+            // Determine conflict strategy
+            let conflict_strategy = if force {
+                ConflictStrategy::DotfileWins
+            } else {
+                strategy.unwrap_or(ConflictStrategy::Interactive)
+            };
+
+            bombadil
+                .install_with_strategy(conflict_strategy)
+                .unwrap_or_else(|err| fatal!("{}", err));
         }
         Cli::Watch { profiles } => {
             Bombadil::watch(profiles).await?;

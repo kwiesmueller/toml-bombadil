@@ -159,7 +159,7 @@ mod test {
 
         assert_that!(decrypted)
             .is_ok()
-            .is_equal_to(&"value".to_string());
+            .is_equal_to("value".to_string());
 
         Ok(())
     }
