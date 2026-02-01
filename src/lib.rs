@@ -40,6 +40,7 @@ pub mod platform;
 pub mod settings;
 mod state;
 mod templating;
+pub mod validate;
 
 pub(crate) const BOMBADIL_CONFIG: &str = "bombadil.toml";
 

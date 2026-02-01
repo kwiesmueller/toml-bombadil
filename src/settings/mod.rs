@@ -101,7 +101,7 @@ impl Settings {
         self.settings.run_hooks_in_dotfiles_dir
     }
 
-    pub(crate) fn get_dotfiles_path(&self) -> anyhow::Result<PathBuf> {
+    pub fn get_dotfiles_path(&self) -> anyhow::Result<PathBuf> {
         let home_dir = dirs::home_dir();
         if home_dir.is_none() {
             return Err(anyhow!("$HOME directory not found"));

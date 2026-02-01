@@ -9,6 +9,7 @@ use std::str::FromStr;
 use toml_bombadil::conflict::ConflictStrategy;
 use toml_bombadil::platform::PlatformContext;
 use toml_bombadil::settings::profiles;
+use toml_bombadil::validate;
 use toml_bombadil::{Bombadil, MetadataType, Mode};
 
 macro_rules! fatal {
@@ -93,11 +94,20 @@ enum Cli {
         profiles: Vec<String>,
     },
     /// Generate shell completions
-    /// Generate shell completions
     GenerateCompletions {
         /// Type of completions to generate
         #[clap(name = "type", value_enum)]
         shell: Shell,
+    },
+    /// Scan dotfiles for potential unencrypted secrets and security issues
+    Validate {
+        /// Exit with non-zero status code if any issues are found
+        #[clap(long)]
+        strict: bool,
+
+        /// Path to the dotfiles directory (defaults to configured path)
+        #[clap(short, long)]
+        path: Option<PathBuf>,
     },
 }
 
@@ -245,6 +255,29 @@ async fn main() -> Result<()> {
         }
         Cli::GenerateCompletions { shell } => {
             clap_complete::generate(shell, &mut Cli::command(), "bombadil", &mut io::stdout())
+        }
+        Cli::Validate { strict, path } => {
+            // Get the dotfiles path - either from argument or from settings
+            let dotfiles_path = match path {
+                Some(p) => p,
+                None => {
+                    // Use the configured dotfiles path from settings
+                    let config = toml_bombadil::settings::Settings::get()
+                        .unwrap_or_else(|err| fatal!("{}", err));
+                    config
+                        .get_dotfiles_path()
+                        .unwrap_or_else(|err| fatal!("{}", err))
+                }
+            };
+
+            let report =
+                validate::scan_directory(&dotfiles_path).unwrap_or_else(|err| fatal!("{}", err));
+
+            report.print();
+
+            if strict && report.has_issues() {
+                std::process::exit(1);
+            }
         }
     };
 
