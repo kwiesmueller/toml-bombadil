@@ -7,6 +7,7 @@ use std::io::BufRead;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use toml_bombadil::conflict::ConflictStrategy;
+use toml_bombadil::platform::PlatformContext;
 use toml_bombadil::settings::profiles;
 use toml_bombadil::{Bombadil, MetadataType, Mode};
 
@@ -84,9 +85,9 @@ enum Cli {
         #[clap(long, short)]
         file: String,
     },
-    /// Get metadata about dots, hooks, path, profiles, or vars
+    /// Get metadata about dots, hooks, path, profiles, vars, or platform
     Get {
-        #[clap(value_name = "VALUE", value_parser = ["dots", "prehooks", "posthooks", "path", "profiles", "vars", "secrets"])]
+        #[clap(value_name = "VALUE", value_parser = ["dots", "prehooks", "posthooks", "path", "profiles", "vars", "secrets", "platform"])]
         value: String,
         #[clap(value_parser = profiles(), num_args(0..))]
         profiles: Vec<String>,
@@ -200,6 +201,23 @@ async fn main() -> Result<()> {
                 .unwrap_or_else(|err| fatal!("{}", err));
         }
         Cli::Get { value, profiles } => {
+            // Handle platform specially since it doesn't need bombadil settings
+            if value == "platform" {
+                let platform = PlatformContext::detect();
+                println!("os: {}", platform.os);
+                if let Some(distro) = &platform.distro {
+                    println!("distro: {}", distro);
+                }
+                if let Some(version) = &platform.distro_version {
+                    println!("distro_version: {}", version);
+                }
+                println!("arch: {}", platform.arch);
+                println!("hostname: {}", platform.hostname);
+                println!("username: {}", platform.username);
+                println!("home: {}", platform.home);
+                return Ok(());
+            }
+
             let metadata_type = match value.as_str() {
                 "dots" => MetadataType::Dots,
                 "prehooks" => MetadataType::PreHooks,

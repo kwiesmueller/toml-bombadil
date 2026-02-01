@@ -1,4 +1,5 @@
 use crate::gpg::{Gpg, GPG_PREFIX};
+use crate::platform::PlatformContext;
 use crate::settings::GPG;
 use anyhow::{anyhow, Result};
 use colored::Colorize;
@@ -8,6 +9,11 @@ use std::io::prelude::*;
 use std::io::BufReader;
 use std::path::{Path, PathBuf};
 use tera::Tera;
+
+// Cached platform context (detected once at startup)
+lazy_static::lazy_static! {
+    static ref PLATFORM: PlatformContext = PlatformContext::detect();
+}
 
 #[derive(Clone, Debug, Default)]
 pub struct Variables {
@@ -72,16 +78,27 @@ impl Variables {
 
         // Create the tera context from variables and secrets.
         let mut context = tera::Context::new();
+
+        // Inject platform context first (can be overridden by user vars)
+        for (name, value) in PLATFORM.to_template_vars() {
+            context.insert(name, &value);
+        }
+
+        // Inject user variables (override platform vars if same name)
         for (name, value) in self.variables.iter() {
             context.insert(name, value);
         }
 
         let profiles_context = serde_json::to_value(profiles)?;
 
+        // Reserved variable names that can't be overridden
+        const RESERVED_VARS: &[&str] =
+            &["profiles", "os", "arch", "distro", "hostname", "username"];
+
         self.secrets.iter().for_each(|(k, v)| {
-            if k == "profiles" {
-                eprintln!("Cannot insert variable '{k}{v}'");
-                eprintln!("'profiles' is a reserved variable name");
+            if RESERVED_VARS.contains(&k.as_str()) {
+                eprintln!("Cannot insert secret variable '{k}'");
+                eprintln!("'{}' is a reserved variable name", k);
             } else {
                 context.insert(k.to_owned(), v);
             }

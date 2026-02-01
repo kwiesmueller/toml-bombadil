@@ -36,6 +36,7 @@ mod git;
 mod gpg;
 mod hook;
 pub mod paths;
+pub mod platform;
 pub mod settings;
 mod state;
 mod templating;
