@@ -1,0 +1,149 @@
+# Comprehensive bombadil.toml demonstrating supported features
+# This is a reference for bombadil's dotfile management capabilities
+
+# Path to dotfiles directory (relative to home or absolute)
+dotfiles_dir = "dotfiles"
+
+# Optional: GPG user ID for secret encryption/decryption
+# gpg_user_id = "user@example.com"
+
+# Import additional configuration files for organization
+import = ["imports/extra-dots.toml"]
+
+[settings]
+# Variable files - merged in order, later files override earlier
+vars = ["variables/base.toml", "variables/theme.toml"]
+
+# Hooks run before/after linking
+prehooks = ["./hooks/pre-link.sh"]
+posthooks = ["./hooks/post-link.sh"]
+
+# Where to run hooks (true = dotfiles dir, false = home dir)
+run_hooks_in_dotfiles_dir = true
+
+# =============================================================================
+# FULL STRATEGY - Complete file replacement via symlinks (default)
+# =============================================================================
+
+[settings.dots.full-simple]
+# Simple single file replacement
+source = "full-simple/config.conf"
+target = ".config/full-simple/config.conf"
+
+[settings.dots.full-directory]
+# Directory replacement - all files symlinked
+source = "full-directory"
+target = ".config/full-directory"
+
+[settings.dots.full-with-vars]
+# File with Tera template variables
+source = "full-simple/templated.conf"
+target = ".config/full-simple/templated.conf"
+# Local vars file specific to this dot (overrides global vars)
+vars = "full-simple/local-vars.toml"
+
+# =============================================================================
+# PATCH STRATEGY - Line-based patching against a base file
+# =============================================================================
+# Useful for system configs like sway, i3, etc. where you want to patch
+# a base config rather than replace it entirely.
+
+[settings.dots.sway-config]
+strategy = "patch"
+base = "/etc/sway/config"
+patches = "patch-demo/patches/"
+target = "~/.config/sway/config"
+
+# =============================================================================
+# INJECT STRATEGY - Append/prepend to existing files with markers
+# =============================================================================
+# Useful for .bashrc, .zshrc, etc. where you want to add your customizations
+# without replacing the entire file. Uses markers for idempotent updates.
+
+[settings.dots.bashrc]
+strategy = "inject"
+target = "~/.bashrc"
+prepend = "inject-demo/bashrc-prepend.sh"
+append = "inject-demo/bashrc-append.sh"
+# Custom marker (default: "BOMBADIL")
+marker = "BOMBADIL"
+
+# =============================================================================
+# SEMANTIC PATCH STRATEGY - Deep merge for structured formats
+# =============================================================================
+# For JSON, YAML, TOML, and INI files. Allows merging, deleting keys,
+# and array operations without replacing the entire file.
+
+[settings.dots.vscode-settings]
+strategy = "semantic_patch"
+source = "semantic-json/settings.patch.toml"
+base = "~/.config/Code/User/settings.json"
+target = "~/.config/Code/User/settings.json"
+
+# =============================================================================
+# HARD COPY - Copy files instead of symlinking (with permissions)
+# =============================================================================
+
+[settings.dots.hardcopy-script]
+source = "hardcopy-demo/script.sh"
+target = ".config/hardcopy-target/script.sh"
+# Copy to additional location with specific permissions
+hard_copy_target = ".local/bin/my-script"
+hard_copy_permissions = 493  # 0o755 in decimal
+
+# =============================================================================
+# IGNORE PATTERNS - Exclude files from linking
+# =============================================================================
+
+[settings.dots.ignore-demo]
+source = "ignore-demo"
+target = ".config/ignore-demo"
+ignore = [
+    "*.tmp",
+    "*.bak",
+    "cache/**",
+    "*.log",
+]
+
+# =============================================================================
+# PACKAGES - Declarative package management
+# =============================================================================
+
+[settings.packages.ripgrep]
+tags = ["cli", "essential"]
+install.dnf = "ripgrep"
+install.apt = "ripgrep"
+install.brew = "ripgrep"
+install.cargo = "ripgrep"
+
+[settings.packages.fd]
+tags = ["cli", "essential"]
+install.dnf = "fd-find"
+install.apt = "fd-find"
+install.brew = "fd"
+install.cargo = { name = "fd-find", features = [] }
+
+# =============================================================================
+# PROFILES - Environment-specific configuration
+# =============================================================================
+
+[profiles.laptop]
+# Override/add dots specific to laptop
+vars = ["variables/laptop.toml"]
+posthooks = ["echo 'Laptop profile applied'"]
+package_tags = ["gui", "laptop"]
+
+[profiles.laptop.dots]
+# Add laptop-specific dot
+laptop-specific = { source = "profile-specific/laptop.conf", target = ".config/profile-specific/laptop.conf" }
+
+[profiles.work]
+vars = ["variables/work.toml"]
+# Inherit from laptop profile
+extra_profiles = ["laptop"]
+
+[profiles.work.dots]
+# Override source for existing dot
+full-simple.source = "profile-specific/work-override.conf"
+# Add work-specific dot
+work-specific = { source = "profile-specific/work.conf", target = ".config/profile-specific/work.conf" }

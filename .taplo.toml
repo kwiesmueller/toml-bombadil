@@ -1,0 +1,14 @@
+# Taplo TOML Language Server configuration
+# Provides schema validation and autocomplete in editors (Zed, VS Code, etc.)
+
+[[rule]]
+keys = ["bombadil.toml", "**/bombadil.toml"]
+
+[rule.options]
+schema = "schema/bombadil.schema.json"
+
+[[rule]]
+keys = ["**/patches/*.toml"]
+
+[rule.options]
+schema = "schema/patch.schema.json"

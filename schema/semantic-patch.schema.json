@@ -1,0 +1,124 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "SemanticPatch",
+  "description": "Semantic patch file format for structured data.",
+  "type": "object",
+  "required": [
+    "format"
+  ],
+  "properties": {
+    "arrays": {
+      "description": "Array operations.",
+      "default": {},
+      "type": "object",
+      "additionalProperties": {
+        "type": "array",
+        "items": {
+          "$ref": "#/definitions/ArrayOp"
+        }
+      }
+    },
+    "base": {
+      "description": "Base file to patch (optional).",
+      "default": null,
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "delete": {
+      "description": "Keys to delete.",
+      "default": [],
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "format": {
+      "description": "Format of the target file.",
+      "allOf": [
+        {
+          "$ref": "#/definitions/SemanticFormat"
+        }
+      ]
+    },
+    "json_patch": {
+      "description": "RFC 6902 JSON Patch operations (advanced).",
+      "default": [],
+      "type": "array",
+      "items": true
+    },
+    "merge": {
+      "description": "Keys/values to merge.",
+      "default": {},
+      "type": "object",
+      "additionalProperties": true
+    }
+  },
+  "definitions": {
+    "ArrayOp": {
+      "description": "Array operation in semantic patches.",
+      "type": "object",
+      "required": [
+        "operation",
+        "value"
+      ],
+      "properties": {
+        "operation": {
+          "description": "Operation type.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ArrayOpType"
+            }
+          ]
+        },
+        "value": {
+          "description": "Value(s) for the operation."
+        }
+      }
+    },
+    "ArrayOpType": {
+      "description": "Array operation types.",
+      "oneOf": [
+        {
+          "description": "Replace entire array.",
+          "type": "string",
+          "enum": [
+            "set"
+          ]
+        },
+        {
+          "description": "Append to array.",
+          "type": "string",
+          "enum": [
+            "append"
+          ]
+        },
+        {
+          "description": "Prepend to array.",
+          "type": "string",
+          "enum": [
+            "prepend"
+          ]
+        },
+        {
+          "description": "Remove matching elements.",
+          "type": "string",
+          "enum": [
+            "remove"
+          ]
+        }
+      ]
+    },
+    "SemanticFormat": {
+      "description": "Supported semantic patch formats.",
+      "type": "string",
+      "enum": [
+        "json",
+        "yaml",
+        "toml",
+        "ini"
+      ]
+    }
+  }
+}

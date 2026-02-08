@@ -1,0 +1,679 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Config",
+  "description": "Root configuration for Bombadil.\n\nThis is the structure of `bombadil.toml`.",
+  "type": "object",
+  "properties": {
+    "dotfiles_dir": {
+      "description": "Path to the dotfiles directory (relative to config file or absolute).",
+      "default": null,
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "gpg_user_id": {
+      "description": "GPG user ID for encrypting/decrypting secrets.",
+      "default": null,
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "import": {
+      "description": "Import additional config files.",
+      "default": [],
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "profiles": {
+      "description": "Named profiles for different environments/machines.",
+      "default": {},
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/definitions/Profile"
+      }
+    },
+    "settings": {
+      "description": "Main settings section.",
+      "default": {
+        "dots": {},
+        "packages": {},
+        "posthooks": [],
+        "prehooks": [],
+        "run_hooks_in_dotfiles_dir": false,
+        "vars": []
+      },
+      "allOf": [
+        {
+          "$ref": "#/definitions/Settings"
+        }
+      ]
+    }
+  },
+  "definitions": {
+    "BinaryInstall": {
+      "description": "Binary download configuration.",
+      "type": "object",
+      "properties": {
+        "asset_pattern": {
+          "description": "Asset filename pattern (supports {{version}}, {{arch}}, {{os}}).",
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "binary_name": {
+          "description": "Binary name within archive.",
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "github": {
+          "description": "GitHub repository (owner/repo format).",
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "install_dir": {
+          "description": "Installation directory.",
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "url": {
+          "description": "Direct URL to download.",
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "version": {
+          "description": "Specific version to install.",
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "CargoInstall": {
+      "description": "Cargo installation configuration.",
+      "anyOf": [
+        {
+          "description": "Simple crate name.",
+          "type": "string"
+        },
+        {
+          "description": "Full configuration with features, git source, etc.",
+          "type": "object",
+          "required": [
+            "name"
+          ],
+          "properties": {
+            "features": {
+              "description": "Features to enable.",
+              "default": [],
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "git": {
+              "description": "Git repository URL (instead of crates.io).",
+              "default": null,
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "locked": {
+              "description": "Use --locked flag.",
+              "default": false,
+              "type": "boolean"
+            },
+            "name": {
+              "description": "Crate name or git URL.",
+              "type": "string"
+            }
+          }
+        }
+      ]
+    },
+    "Dot": {
+      "description": "A dotfile entry describing how to manage a config file or directory.",
+      "anyOf": [
+        {
+          "description": "Simple dot with just source and target.",
+          "type": "object",
+          "required": [
+            "source",
+            "target"
+          ],
+          "properties": {
+            "source": {
+              "type": "string"
+            },
+            "target": {
+              "type": "string"
+            }
+          }
+        },
+        {
+          "description": "Full dot with all options.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/DotFull"
+            }
+          ]
+        }
+      ]
+    },
+    "DotFull": {
+      "description": "Full dotfile configuration with all available options.",
+      "type": "object",
+      "properties": {
+        "append": {
+          "description": "For inject strategy: content to append.",
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "base": {
+          "description": "For patch strategy: base file to patch against.",
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "hard_copy_permissions": {
+          "description": "Permissions for hard copy (octal, e.g., 0o644).",
+          "default": null,
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "hard_copy_target": {
+          "description": "Path for hard copy (instead of symlink).",
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "ignore": {
+          "description": "Glob patterns to ignore within this dot.",
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "marker": {
+          "description": "For inject strategy: marker for idempotent injection.",
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "patches": {
+          "description": "For patch strategy: directory containing patch files.",
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "prepend": {
+          "description": "For inject strategy: content to prepend.",
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": {
+          "description": "Source path relative to dotfiles directory.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "strategy": {
+          "description": "Strategy for managing this dotfile.",
+          "default": "full",
+          "allOf": [
+            {
+              "$ref": "#/definitions/DotStrategy"
+            }
+          ]
+        },
+        "target": {
+          "description": "Target path (supports ~ expansion).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "vars": {
+          "description": "Local variables file for this dot.",
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "DotOverride": {
+      "description": "Dotfile override in a profile.",
+      "type": "object",
+      "properties": {
+        "hard_copy_permissions": {
+          "description": "Override hard copy permissions.",
+          "default": null,
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "hard_copy_target": {
+          "description": "Override hard copy target.",
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "ignore": {
+          "description": "Override ignore patterns.",
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "source": {
+          "description": "Override source path.",
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "strategy": {
+          "description": "Override strategy.",
+          "default": null,
+          "anyOf": [
+            {
+              "$ref": "#/definitions/DotStrategy"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "target": {
+          "description": "Override target path.",
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "vars": {
+          "description": "Override local variables file.",
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "DotStrategy": {
+      "description": "Strategy for managing a dotfile.",
+      "oneOf": [
+        {
+          "description": "Full file replacement with symlink (default).",
+          "type": "string",
+          "enum": [
+            "full"
+          ]
+        },
+        {
+          "description": "Line-based patching against a base file.",
+          "type": "string",
+          "enum": [
+            "patch"
+          ]
+        },
+        {
+          "description": "Semantic patching for structured formats (JSON, YAML, TOML).",
+          "type": "string",
+          "enum": [
+            "semantic_patch"
+          ]
+        },
+        {
+          "description": "Append/prepend to existing file with markers.",
+          "type": "string",
+          "enum": [
+            "inject"
+          ]
+        }
+      ]
+    },
+    "GitInstall": {
+      "description": "Git clone and build configuration.",
+      "type": "object",
+      "required": [
+        "url"
+      ],
+      "properties": {
+        "build": {
+          "description": "Build command to run after clone.",
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "install": {
+          "description": "Install command to run after build.",
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "ref_": {
+          "description": "Branch or tag to checkout.",
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "url": {
+          "description": "Git repository URL.",
+          "type": "string"
+        }
+      }
+    },
+    "InstallMethods": {
+      "description": "Installation methods for different package managers.",
+      "type": "object",
+      "properties": {
+        "apt": {
+          "description": "APT package name (Debian/Ubuntu).",
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "binary": {
+          "description": "Binary download configuration.",
+          "default": null,
+          "anyOf": [
+            {
+              "$ref": "#/definitions/BinaryInstall"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "brew": {
+          "description": "Homebrew package name (macOS/Linux).",
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "cargo": {
+          "description": "Cargo crate name.",
+          "default": null,
+          "anyOf": [
+            {
+              "$ref": "#/definitions/CargoInstall"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "dnf": {
+          "description": "DNF package name (Fedora/RHEL).",
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "flatpak": {
+          "description": "Flatpak application ID.",
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "git": {
+          "description": "Git repository to clone and build.",
+          "default": null,
+          "anyOf": [
+            {
+              "$ref": "#/definitions/GitInstall"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "go": {
+          "description": "Go module path.",
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "pacman": {
+          "description": "Pacman package name (Arch).",
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "Package": {
+      "description": "Package definition with multi-manager support.",
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "description": "Whether this package is enabled.",
+          "default": true,
+          "type": "boolean"
+        },
+        "install": {
+          "description": "Installation methods by package manager.",
+          "default": {
+            "apt": null,
+            "binary": null,
+            "brew": null,
+            "cargo": null,
+            "dnf": null,
+            "flatpak": null,
+            "git": null,
+            "go": null,
+            "pacman": null
+          },
+          "allOf": [
+            {
+              "$ref": "#/definitions/InstallMethods"
+            }
+          ]
+        },
+        "tags": {
+          "description": "Tags for filtering packages.",
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "Profile": {
+      "description": "Profile for environment-specific configuration.",
+      "type": "object",
+      "properties": {
+        "dots": {
+          "description": "Dotfile overrides for this profile.",
+          "default": {},
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/definitions/DotOverride"
+          }
+        },
+        "extra_profiles": {
+          "description": "Extra profiles to enable (legacy, prefer `inherits`).",
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "inherits": {
+          "description": "Profiles this profile inherits from.",
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "package_exclude_tags": {
+          "description": "Package tags to disable for this profile.",
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "package_tags": {
+          "description": "Package tags to enable for this profile.",
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "posthooks": {
+          "description": "Post-hooks specific to this profile.",
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "prehooks": {
+          "description": "Pre-hooks specific to this profile.",
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "run_hooks_in_dotfiles_dir": {
+          "description": "Whether to run hooks in dotfiles directory.",
+          "default": false,
+          "type": "boolean"
+        },
+        "vars": {
+          "description": "Additional variable files for this profile.",
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "Settings": {
+      "description": "Main settings section containing dots, packages, hooks, and variables.",
+      "type": "object",
+      "properties": {
+        "dots": {
+          "description": "Dotfile entries to manage.",
+          "default": {},
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/definitions/Dot"
+          }
+        },
+        "packages": {
+          "description": "Package definitions.",
+          "default": {},
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/definitions/Package"
+          }
+        },
+        "posthooks": {
+          "description": "Commands to run after linking.",
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "prehooks": {
+          "description": "Commands to run before linking.",
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "run_hooks_in_dotfiles_dir": {
+          "description": "Whether to run hooks in the dotfiles directory.",
+          "default": false,
+          "type": "boolean"
+        },
+        "vars": {
+          "description": "Variable files to load.",
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}

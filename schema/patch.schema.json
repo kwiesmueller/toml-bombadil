@@ -1,0 +1,94 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "LinePatch",
+  "description": "Line-based patch file format.",
+  "type": "object",
+  "properties": {
+    "delete": {
+      "description": "Delete operations (remove matching lines).",
+      "default": [],
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/LineDeleteOp"
+      }
+    },
+    "insert": {
+      "description": "Insert operations (add lines after/before match).",
+      "default": [],
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/LineInsertOp"
+      }
+    },
+    "set": {
+      "description": "Set operations (replace matching lines).",
+      "default": [],
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/LineSetOp"
+      }
+    }
+  },
+  "definitions": {
+    "LineDeleteOp": {
+      "description": "Delete lines matching a pattern.",
+      "type": "object",
+      "required": [
+        "match"
+      ],
+      "properties": {
+        "match": {
+          "description": "Regex pattern to match lines to delete.",
+          "type": "string"
+        }
+      }
+    },
+    "LineInsertOp": {
+      "description": "Insert lines relative to a match.",
+      "type": "object",
+      "required": [
+        "lines"
+      ],
+      "properties": {
+        "after": {
+          "description": "Insert after line matching this pattern.",
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "before": {
+          "description": "Insert before line matching this pattern.",
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "lines": {
+          "description": "Lines to insert.",
+          "type": "string"
+        }
+      }
+    },
+    "LineSetOp": {
+      "description": "Replace a line matching a pattern.",
+      "type": "object",
+      "required": [
+        "match",
+        "value"
+      ],
+      "properties": {
+        "match": {
+          "description": "Regex pattern to match.",
+          "type": "string"
+        },
+        "value": {
+          "description": "Replacement value.",
+          "type": "string"
+        }
+      }
+    }
+  }
+}
