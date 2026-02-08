@@ -122,6 +122,15 @@ pub enum BombadilError {
         cause: std::io::Error,
     },
 
+    #[error("Package removal failed: {name}")]
+    #[diagnostic(code(bombadil::packages::remove_failed))]
+    PackageRemoveFailed {
+        name: String,
+        manager: String,
+        #[source]
+        cause: std::io::Error,
+    },
+
     // ─────────────────────────────────────────────────────────────────────────
     // Secret Errors
     // ─────────────────────────────────────────────────────────────────────────

@@ -132,6 +132,18 @@ pub enum CargoConfig {
 }
 
 impl CargoConfig {
+    /// Get the package/crate name from the configuration
+    pub fn package_name(&self) -> &str {
+        match self {
+            CargoConfig::Simple(name) => name,
+            CargoConfig::Extended { crate_name, bin, .. } => {
+                bin.as_deref()
+                    .or(crate_name.as_deref())
+                    .unwrap_or("unknown")
+            }
+        }
+    }
+
     /// Build the cargo install command arguments
     pub fn to_args(&self) -> Vec<String> {
         match self {
