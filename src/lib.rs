@@ -363,20 +363,32 @@ impl Dot {
 pub struct Bombadil {
     // path to self configuration, relative to $HOME
     path: PathBuf,
-    // A list of dotfiles to link for this instance
+    // A list of dotfiles to link for this instance (v3)
     dots: HashMap<String, Dot>,
-    // Variables for the tera template context
+    // Variables for the tera template context (v3)
     vars: Variables,
     // Pre-hook commands, run before `bombadil-link`
     prehooks: Vec<Hook>,
     // Post-hook commands, run after `bombadil-link`
     posthooks: Vec<Hook>,
-    // Available profiles
+    // Available profiles (v3)
     profiles: HashMap<String, Profile>,
-    // Profiles enabled for this isntance
+    // Profiles enabled for this instance
     profile_enabled: Vec<String>,
     // A GPG user id, linking to user encryption/decryption key via gnupg
     gpg: Option<Gpg>,
+
+    // ── v4 fields ──────────────────────────────────────────────────────
+    // v4 config (set when loaded via Bombadil::load())
+    v4_config: Option<config::Config>,
+    // v4 dots (merged base + profiles)
+    v4_dots: HashMap<String, config::Dot>,
+    // Flat variable map for v4 rendering
+    v4_vars: HashMap<String, String>,
+    // Decrypted GPG secrets for v4
+    v4_secrets: HashMap<String, String>,
+    // Absolute path to dotfiles directory
+    dotfiles_dir: PathBuf,
 }
 
 /// Enable or disable GPG encryption when linking dotfiles
@@ -1991,6 +2003,7 @@ impl Bombadil {
         let profiles = config.profiles;
 
         Ok(Self {
+            dotfiles_dir: path.clone(),
             path,
             dots,
             vars,
@@ -1999,7 +2012,406 @@ impl Bombadil {
             profiles,
             gpg,
             profile_enabled: vec![],
+            v4_config: None,
+            v4_dots: HashMap::new(),
+            v4_vars: HashMap::new(),
+            v4_secrets: HashMap::new(),
         })
+    }
+
+    /// Load Bombadil from v4 config system.
+    ///
+    /// Uses `config::load_config_resolved()` for import resolution and
+    /// `LoaderRegistry` for format detection.
+    pub fn load(mode: Mode) -> Result<Bombadil> {
+        let config_path = config::config_path()
+            .map_err(|e| anyhow!("Failed to find config: {}", e))?;
+
+        let v4_config = config::load_config_resolved(&config_path)
+            .map_err(|e| anyhow!("Failed to load config: {}", e))?;
+
+        let dotfiles_dir = config::resolve_dotfiles_dir(&v4_config, &config_path);
+
+        let gpg = match mode {
+            Mode::Gpg => v4_config.gpg_user_id.as_ref().map(|uid| Gpg::new(uid)),
+            Mode::NoGpg => None,
+        };
+
+        let run_hooks_in_dotfiles_dir = v4_config.settings.run_hooks_in_dotfiles_dir;
+
+        // Load variables from configured var file paths
+        let mut v4_vars = HashMap::new();
+        let mut v4_secrets = HashMap::new();
+        for var_path in &v4_config.settings.vars {
+            let full_path = dotfiles_dir.join(var_path);
+            if full_path.exists() {
+                match load_var_file(&full_path, gpg.as_ref()) {
+                    Ok((vars, secrets)) => {
+                        v4_vars.extend(vars);
+                        v4_secrets.extend(secrets);
+                    }
+                    Err(e) => {
+                        eprintln!(
+                            "{} {:?} : {}",
+                            "Could not load var file".yellow(),
+                            full_path,
+                            e
+                        );
+                    }
+                }
+            }
+        }
+
+        // Resolve % references in variables
+        resolve_var_refs(&mut v4_vars);
+
+        // Build hooks
+        let prehooks = v4_config
+            .settings
+            .prehooks
+            .iter()
+            .map(|cmd| Hook::new(dotfiles_dir.clone(), cmd, run_hooks_in_dotfiles_dir))
+            .collect();
+
+        let posthooks = v4_config
+            .settings
+            .posthooks
+            .iter()
+            .map(|cmd| Hook::new(dotfiles_dir.clone(), cmd, run_hooks_in_dotfiles_dir))
+            .collect();
+
+        // Convert v4 dots for the struct
+        let v4_dots = v4_config.settings.dots.clone();
+
+        // Build v4 profiles map converted to v3 Profile for compatibility
+        let profiles: HashMap<String, Profile> = v4_config
+            .profiles
+            .iter()
+            .map(|(k, p)| {
+                let v3_dots: HashMap<String, settings::dots::DotOverride> = p.dots.iter().map(|(dk, dov)| {
+                    (dk.clone(), settings::dots::DotOverride {
+                        source: dov.source.clone(),
+                        target: dov.target.clone(),
+                        ignore: dov.ignore.clone(),
+                        vars: dov.vars.clone(),
+                        hard_copy_target: dov.hard_copy_target.clone(),
+                        hard_copy_permissions: dov.hard_copy_permissions,
+                    })
+                }).collect();
+
+                (k.clone(), Profile {
+                    dots: v3_dots,
+                    packages: HashMap::new(),
+                    package_tags: p.package_tags.clone(),
+                    excluded_package_tags: p.package_exclude_tags.clone(),
+                    extra_profiles: p.extra_profiles.clone(),
+                    prehooks: p.prehooks.clone(),
+                    posthooks: p.posthooks.clone(),
+                    vars: p.vars.clone(),
+                    run_hooks_in_dotfiles_dir: p.run_hooks_in_dotfiles_dir,
+                })
+            })
+            .collect();
+
+        // Also need v3-compatible vars and dots for backwards compat methods
+        let vars = Variables {
+            variables: v4_vars.clone(),
+            secrets: v4_secrets.clone(),
+        };
+
+        // Build v3-compatible dots from v4 dots
+        let v3_dots = v4_dots
+            .iter()
+            .filter_map(|(k, d)| {
+                v3_dot_from_v4(d).map(|dot| (k.clone(), dot))
+            })
+            .collect();
+
+        Ok(Self {
+            dotfiles_dir: dotfiles_dir.clone(),
+            path: dotfiles_dir,
+            dots: v3_dots,
+            vars,
+            prehooks,
+            posthooks,
+            profiles,
+            gpg,
+            profile_enabled: vec![],
+            v4_config: Some(v4_config),
+            v4_dots,
+            v4_vars,
+            v4_secrets,
+        })
+    }
+
+    /// Get the v4 config, if loaded via `Bombadil::load()`.
+    pub fn v4_config(&self) -> Option<&config::Config> {
+        self.v4_config.as_ref()
+    }
+
+    /// Get the dotfiles directory path.
+    pub fn dotfiles_path(&self) -> &Path {
+        &self.dotfiles_dir
+    }
+
+    /// Install dotfiles using v4 strategy dispatch.
+    ///
+    /// Dispatches each dot to its configured strategy (Full, Patch, Inject, SemanticPatch).
+    /// Falls back to Full strategy for simple dots.
+    pub fn install_v4(&self, strategy: ConflictStrategy) -> Result<()> {
+        self.check_dotfile_dir()?;
+
+        // Run prehooks
+        for hook in &self.prehooks {
+            if let Err(err) = hook.run() {
+                eprintln!("{}", err);
+            }
+        }
+
+        let dots_dir = self.dotfiles_dir.join(".dots");
+        fs::create_dir_all(&dots_dir)?;
+
+        let conflict_ctx = ConflictContext::new(strategy);
+
+        // Build tera context for rendering
+        let context = dots::render::build_context(
+            &self.v4_vars,
+            &self.v4_secrets,
+            &self.profile_enabled,
+        );
+
+        // Install each v4 dot using strategy dispatch
+        for (key, dot) in &self.v4_dots {
+            let dot_strategy = match dot {
+                config::Dot::Simple { .. } => config::DotStrategy::Full,
+                config::Dot::Full(full) => full.strategy.clone(),
+            };
+
+            // Build per-dot context with local vars
+            let dot_context = self.build_dot_context(dot, &context);
+
+            let installer: Box<dyn dots::DotInstaller> = match dot_strategy {
+                config::DotStrategy::Full => {
+                    Box::new(dots::strategy::full::FullInstaller)
+                }
+                config::DotStrategy::Patch => {
+                    Box::new(dots::strategy::patch::PatchInstaller)
+                }
+                config::DotStrategy::Inject => {
+                    Box::new(dots::strategy::inject::InjectInstaller)
+                }
+                config::DotStrategy::SemanticPatch => {
+                    let format = match dot {
+                        config::Dot::Full(full) => full.target.as_ref()
+                            .map(|t| dots::strategy::semantic::SemanticInstaller::detect_format(t))
+                            .unwrap_or_default(),
+                        _ => config::SemanticFormat::default(),
+                    };
+                    Box::new(dots::strategy::semantic::SemanticInstaller::new(format))
+                }
+            };
+
+            match installer.install(dot, &self.dotfiles_dir, &dot_context) {
+                Ok(result) => {
+                    let (source_display, target_display) = dot_display_paths(dot, &self.dotfiles_dir);
+                    match result {
+                        dots::InstallResult::Created => {
+                            println!(
+                                "Created - {} => {}",
+                                source_display.blue(),
+                                target_display.green()
+                            );
+                        }
+                        dots::InstallResult::Updated => {
+                            println!(
+                                "{} => {}",
+                                source_display.blue(),
+                                target_display.yellow()
+                            );
+                        }
+                        dots::InstallResult::Unchanged => {
+                            println!(
+                                "Unchanged - {} => {}",
+                                source_display,
+                                target_display
+                            );
+                        }
+                        dots::InstallResult::Ignored => {}
+                        dots::InstallResult::Skipped => {}
+                    }
+                }
+                Err(err) => {
+                    eprintln!("Error installing dot '{}': {}", key, err);
+                }
+            }
+        }
+
+        // Handle hard copy targets as post-step
+        for (_key, dot) in &self.v4_dots {
+            if let config::Dot::Full(full) = dot {
+                if let Some(hard_copy_target) = &full.hard_copy_target {
+                    if let Some(source) = &full.source {
+                        let copy_path = self.dotfiles_dir.join(".dots").join(source);
+                        if copy_path.exists() {
+                            let target = config::resolve_path(hard_copy_target);
+                            if let Some(parent) = target.parent() {
+                                let _ = fs::create_dir_all(parent);
+                            }
+                            let _ = fs::copy(&copy_path, &target);
+
+                            if let Some(perms) = full.hard_copy_permissions {
+                                use std::os::unix::fs::PermissionsExt;
+                                let _ = fs::set_permissions(
+                                    &target,
+                                    fs::Permissions::from_mode(perms),
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Print conflict summary
+        conflict_ctx.print_summary();
+
+        // Run posthooks
+        for hook in &self.posthooks {
+            if let Err(err) = hook.run() {
+                eprintln!("Failed to run posthook: {}", err);
+            }
+        }
+
+        // State tracking
+        let absolute_path = &self.dotfiles_dir;
+        let previous_state = BombadilState::read(absolute_path.to_owned());
+        let new_state = BombadilState::from(self);
+
+        if let Ok(previous_state) = previous_state {
+            let diff = previous_state.symlinks.difference(&new_state.symlinks);
+            for orphan in diff {
+                if orphan.exists() {
+                    if let Ok(canonicalized) = orphan.canonicalize() {
+                        if let Ok(()) = unlink(orphan) {
+                            if canonicalized.is_dir() {
+                                let _ = fs::remove_dir_all(&canonicalized);
+                            } else {
+                                let _ = fs::remove_file(&canonicalized);
+                            }
+                            tracing::info!(target = ?canonicalized, symlink = ?orphan, "Deleted orphaned symlink");
+                        }
+                    }
+                }
+            }
+        }
+
+        new_state.write()?;
+
+        Ok(())
+    }
+
+    /// Build a per-dot tera::Context with local vars overlaid on the base context.
+    fn build_dot_context(&self, dot: &config::Dot, base_ctx: &tera::Context) -> tera::Context {
+        let mut ctx = base_ctx.clone();
+
+        // Load local vars if configured
+        let local_vars_path = match dot {
+            config::Dot::Full(full) => full.vars.as_ref().map(|v| self.dotfiles_dir.join(v)),
+            config::Dot::Simple { source, .. } => {
+                // Check for vars.toml next to the source
+                let source_path = self.dotfiles_dir.join(source);
+                let vars_path = if source_path.is_dir() {
+                    source_path.join("vars.toml")
+                } else {
+                    source_path.parent().map(|p| p.join("vars.toml")).unwrap_or_default()
+                };
+                if vars_path.exists() {
+                    Some(vars_path)
+                } else {
+                    None
+                }
+            }
+        };
+
+        if let Some(vars_path) = local_vars_path {
+            if vars_path.exists() {
+                if let Ok((local_vars, _)) = load_var_file(&vars_path, self.gpg.as_ref()) {
+                    for (k, v) in local_vars {
+                        ctx.insert(&k, &v);
+                    }
+                }
+            }
+        }
+
+        ctx
+    }
+
+    /// Enable profiles using v4 config.
+    pub fn enable_profiles_v4(&mut self, profile_keys: Vec<&str>) -> Result<()> {
+        if profile_keys.is_empty() {
+            return Ok(());
+        }
+
+        self.profile_enabled = profile_keys.iter().map(ToString::to_string).collect();
+
+        if let Some(ref v4_config) = self.v4_config {
+            for profile_key in &profile_keys {
+                let profile = v4_config.profiles.get(*profile_key)
+                    .ok_or_else(|| anyhow!("Profile '{}' not found", profile_key))?;
+
+                // Merge dot overrides
+                for (key, dot_override) in &profile.dots {
+                    if let Some(existing) = self.v4_dots.get_mut(key) {
+                        apply_v4_dot_override(existing, dot_override);
+                    } else if let (Some(source), Some(target)) = (&dot_override.source, &dot_override.target) {
+                        // Create new dot entry from override
+                        self.v4_dots.insert(
+                            key.clone(),
+                            config::Dot::Simple {
+                                source: source.clone(),
+                                target: target.clone(),
+                            },
+                        );
+                    }
+                }
+
+                // Add profile vars
+                for var_path in &profile.vars {
+                    let full_path = self.dotfiles_dir.join(var_path);
+                    if full_path.exists() {
+                        if let Ok((vars, secrets)) = load_var_file(&full_path, self.gpg.as_ref()) {
+                            self.v4_vars.extend(vars.clone());
+                            self.v4_secrets.extend(secrets.clone());
+                            self.vars.variables.extend(vars);
+                            self.vars.secrets.extend(secrets);
+                        }
+                    }
+                }
+
+                // Add profile hooks
+                let run_in_dotfiles = profile.run_hooks_in_dotfiles_dir;
+                let prehooks: Vec<Hook> = profile
+                    .prehooks
+                    .iter()
+                    .map(|cmd| Hook::new(self.dotfiles_dir.clone(), cmd, run_in_dotfiles))
+                    .collect();
+                self.prehooks.extend(prehooks);
+
+                let posthooks: Vec<Hook> = profile
+                    .posthooks
+                    .iter()
+                    .map(|cmd| Hook::new(self.dotfiles_dir.clone(), cmd, run_in_dotfiles))
+                    .collect();
+                self.posthooks.extend(posthooks);
+
+                // Sub-profile recursion is handled by v3 enable_profiles() call below
+            }
+        }
+
+        // Also enable in v3 path for backwards compatibility
+        self.enable_profiles(profile_keys)?;
+
+        Ok(())
     }
 
     /// Pretty print metadata, possible values are Dots, PreHooks, PostHook, Path, Profiles, Vars, Secrets
@@ -2109,6 +2521,158 @@ fn format_hook_logs(result: &hook::HookResult) -> String {
     }
 
     log
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// v4 helper functions
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Load a TOML variable file and separate plain vars from GPG-encrypted secrets.
+///
+/// Returns `(variables, secrets)` where secrets are values prefixed with `gpg:`
+/// that have been decrypted using the provided GPG key.
+fn load_var_file(
+    path: &Path,
+    gpg: Option<&Gpg>,
+) -> Result<(HashMap<String, String>, HashMap<String, String>)> {
+    let content = fs::read_to_string(path)
+        .with_context(|| format!("reading var file {}", path.display()))?;
+
+    let variables: HashMap<String, String> = toml::from_str(&content)
+        .with_context(|| format!("parsing var file {}", path.display()))?;
+
+    let mut secrets = HashMap::new();
+    if let Some(gpg) = gpg {
+        for (key, value) in &variables {
+            if value.starts_with(gpg::GPG_PREFIX) {
+                let encrypted = value.strip_prefix(gpg::GPG_PREFIX).unwrap();
+                match gpg.decrypt_secret(encrypted) {
+                    Ok(decrypted) => {
+                        secrets.insert(key.clone(), decrypted);
+                    }
+                    Err(e) => {
+                        eprintln!(
+                            "{} {}: {}",
+                            "Failed to decrypt secret".yellow(),
+                            key,
+                            e
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    Ok((variables, secrets))
+}
+
+/// Resolve `%reference` patterns in variables.
+///
+/// If a variable value starts with `%`, it references another variable's value.
+/// e.g., `red = "%meta_red"` will resolve to the value of `meta_red`.
+fn resolve_var_refs(vars: &mut HashMap<String, String>) {
+    let refs: Vec<(String, String)> = vars
+        .iter()
+        .filter(|(_, v)| v.starts_with('%'))
+        .map(|(k, v)| (k.clone(), v[1..].to_string()))
+        .collect();
+
+    for (key, ref_key) in refs {
+        if let Some(value) = vars.get(&ref_key).cloned() {
+            vars.insert(key, value);
+        } else {
+            eprintln!(
+                "{}",
+                format!("Reference %{} not found in settings", &ref_key).yellow()
+            );
+        }
+    }
+}
+
+/// Convert a v4 `config::Dot` to a v3 `settings::dots::Dot` for backwards compatibility.
+fn v3_dot_from_v4(dot: &config::Dot) -> Option<Dot> {
+    match dot {
+        config::Dot::Simple { source, target } => Some(Dot {
+            source: source.clone(),
+            target: target.clone(),
+            ignore: vec![],
+            vars: Dot::default_vars(),
+            hard_copy_target: None,
+            hard_copy_permissions: None,
+        }),
+        config::Dot::Full(full) => {
+            let source = full.source.clone()?;
+            let target = full.target.clone()?;
+            Some(Dot {
+                source,
+                target,
+                ignore: full.ignore.clone(),
+                vars: full.vars.clone().unwrap_or_else(Dot::default_vars),
+                hard_copy_target: full.hard_copy_target.clone(),
+                hard_copy_permissions: full.hard_copy_permissions,
+            })
+        }
+    }
+}
+
+/// Apply a v4 profile dot override to an existing v4 dot.
+fn apply_v4_dot_override(dot: &mut config::Dot, overrides: &config::DotOverride) {
+    match dot {
+        config::Dot::Simple { source, target } => {
+            if let Some(new_source) = &overrides.source {
+                *source = new_source.clone();
+            }
+            if let Some(new_target) = &overrides.target {
+                *target = new_target.clone();
+            }
+        }
+        config::Dot::Full(full) => {
+            if let Some(new_source) = &overrides.source {
+                full.source = Some(new_source.clone());
+            }
+            if let Some(new_target) = &overrides.target {
+                full.target = Some(new_target.clone());
+            }
+            if let Some(new_strategy) = &overrides.strategy {
+                full.strategy = new_strategy.clone();
+            }
+            if !overrides.ignore.is_empty() {
+                full.ignore = overrides.ignore.clone();
+            }
+            if let Some(new_vars) = &overrides.vars {
+                full.vars = Some(new_vars.clone());
+            }
+            if let Some(new_hct) = &overrides.hard_copy_target {
+                full.hard_copy_target = Some(new_hct.clone());
+            }
+            if let Some(new_hcp) = &overrides.hard_copy_permissions {
+                full.hard_copy_permissions = Some(*new_hcp);
+            }
+        }
+    }
+}
+
+/// Extract display-friendly source and target paths from a v4 dot.
+fn dot_display_paths(dot: &config::Dot, dotfiles_dir: &Path) -> (String, String) {
+    match dot {
+        config::Dot::Simple { source, target } => (
+            dotfiles_dir.join(source).display().to_string(),
+            target.display().to_string(),
+        ),
+        config::Dot::Full(full) => {
+            let source_display = full
+                .source
+                .as_ref()
+                .map(|s| dotfiles_dir.join(s).display().to_string())
+                .unwrap_or_else(|| "<no source>".to_string());
+            let target_display = full
+                .target
+                .as_ref()
+                .map(|t| t.display().to_string())
+                .unwrap_or_else(|| "<no target>".to_string());
+            (source_display, target_display)
+        }
+    }
 }
 
 #[cfg(test)]
