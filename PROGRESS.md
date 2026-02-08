@@ -48,19 +48,32 @@
 - [x] Updated `BombadilState::from()` to collect targets from both v3 and v4 dots
 - Commit: `516c847`
 
+### Phase 3-4: Fix conflict.rs + Update CLI
+- [x] Updated CLI commands to use `Bombadil::load()` instead of `from_settings()`
+- [x] Added `get_dotfiles_path()` helper using v4 config
+- [x] Made ImportPath accept both v3 struct and v4 plain string formats
+- [x] Fixed 3 pre-existing test failures (audit display, inject assertion, backup strategy)
+- [x] Added EOF handling to conflict.rs `prompt_user()` to prevent stack overflow
+- Commit: `1067bf2`
+
+### Critical Fix: Dot Schema Untagged Enum
+- [x] `Dot` was `#[serde(untagged)]` enum; `Simple` variant greedily matched, dropping fields
+- [x] Merged `Dot::Simple`/`Dot::Full(DotFull)` into single flat `Dot` struct
+- [x] Fixed template rendering (local vars now loaded properly)
+- [x] Fixed ignore patterns, hard copy, strategy fields
+- [x] Fixed `resolve_dotfiles_dir()` for relative paths
+- [x] Added `#[serde(default)]` to v3 Dot source/target for v4 compat
+- [x] Added warn-level logging for template rendering failures
+- [x] E2E verified: templating, hard copies, ignore patterns, hooks, imports all working
+- Commit: `7895635`
+
+### Stream 3: Package Removal
+- [x] Implemented `remove()` on PackageManager backends (dnf, apt, brew, pacman, cargo, flatpak)
+- [x] Wired up `PackagesCommand::Remove` in CLI with confirmation prompt
+- [x] Added `--yes` flag for non-interactive removal
+- Commit: previous session
+
 ## In Progress
-
-### Phase 3-4: Fix conflict.rs + Update CLI (Agent)
-- [ ] Change `Conflict::detect()` to accept `dotfiles_dir: &Path` parameter
-- [ ] Remove `use crate::settings::dotfile_dir` from conflict.rs
-- [ ] Update CLI to support v4 config profile loading
-
-### Stream 3: Package Removal (Agent)
-- [ ] Implement `remove()` on PackageManager backends
-- [ ] Wire up `PackagesCommand::Remove` in CLI with confirmation prompt
-- [ ] Add `--yes` flag for non-interactive removal
-
-## Pending
 
 ### Phase 5-6: Delete v3 Modules
 - [ ] Remove `src/settings/` (replaced by `src/config/`)
@@ -68,9 +81,11 @@
 - [ ] Remove `src/templating.rs` (replaced by `src/dots/render.rs`)
 - [ ] Remove `src/error.rs` (replaced by `src/core/error.rs`)
 - [ ] Remove `config` crate and `lazy_static` from Cargo.toml
+- **Blocked**: v3 install path still used by CLI for audit integration. PackageManager still uses v3 Package types.
 
 ### Stream 4b-d: Schema, Examples, Tests
+- [x] Example configs created for all 4 strategies + hard copy + ignore + packages + profiles
+- [x] E2E container test infrastructure (Containerfile, explore.sh)
 - [ ] Generate `schema/bombadil.schema.json` via `bombadil schema config`
 - [ ] Create `.taplo.toml` for Zed integration
-- [ ] Add example configs for all 4 strategies
-- [ ] E2E tests for patch, inject, semantic strategies
+- [ ] Automated E2E test assertions (tests/e2e.rs)
