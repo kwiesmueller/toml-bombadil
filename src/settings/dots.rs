@@ -1,4 +1,3 @@
-use crate::dots::DotVar;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -7,8 +6,10 @@ use std::path::PathBuf;
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct Dot {
     /// Path relative to user defined dotfile
+    #[serde(default)]
     pub source: PathBuf,
     /// Target path either relative to $HOME or absolute
+    #[serde(default)]
     pub target: PathBuf,
     /// Glob pattern of files to ignore when creating symlinks
     #[serde(default)]
@@ -29,6 +30,13 @@ pub struct Dot {
     /// Permissions to set on the hard copy target in chmod syntax.
     #[serde(default)]
     pub hard_copy_permissions: Option<u32>,
+}
+
+impl Dot {
+    /// Default vars file path.
+    pub fn default_vars() -> PathBuf {
+        PathBuf::from("vars.toml")
+    }
 }
 
 /// Same as dot but source and target are optionals

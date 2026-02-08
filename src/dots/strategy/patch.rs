@@ -6,7 +6,7 @@
 //! - `delete`: Remove lines matching a pattern
 
 use super::{DotInstaller, InstallResult};
-use crate::config::{resolve_path, Dot, DotFull, LinePatch, LineSetOp, LineInsertOp, LineDeleteOp};
+use crate::config::{resolve_path, Dot, LinePatch, LineSetOp, LineInsertOp, LineDeleteOp};
 use crate::core::{BombadilError, Result};
 use crate::dots::render;
 use regex::Regex;
@@ -33,22 +33,12 @@ impl DotInstaller for PatchInstaller {
         dotfiles_dir: &Path,
         vars: &tera::Context,
     ) -> Result<InstallResult> {
-        let full = match dot {
-            Dot::Full(full) => full,
-            Dot::Simple { .. } => {
-                return Err(BombadilError::ConfigInvalid {
-                    message: "Patch strategy requires full dot configuration".to_string(),
-                    help: Some("Use strategy = \"patch\" with base and patches fields".to_string()),
-                });
-            }
-        };
-
-        let base_path = full.base.as_ref().ok_or_else(|| BombadilError::ConfigInvalid {
+        let base_path = dot.base.as_ref().ok_or_else(|| BombadilError::ConfigInvalid {
             message: "Patch strategy requires a 'base' field".to_string(),
             help: Some("Add base = \"/path/to/base/file\" to your dot configuration".to_string()),
         })?;
 
-        let target = full.target.as_ref().ok_or_else(|| BombadilError::ConfigInvalid {
+        let target = dot.target.as_ref().ok_or_else(|| BombadilError::ConfigInvalid {
             message: "Dot missing target path".to_string(),
             help: Some("Add a 'target' field to the dot configuration".to_string()),
         })?;
@@ -70,7 +60,7 @@ impl DotInstaller for PatchInstaller {
         };
 
         // Load and apply patches
-        let patches = self.load_patches(full, dotfiles_dir)?;
+        let patches = self.load_patches(dot, dotfiles_dir)?;
 
         // Extract variables for template rendering
         let vars_map = extract_vars_from_context(vars);
@@ -83,7 +73,7 @@ impl DotInstaller for PatchInstaller {
         let patched = self.apply_patches(&base_content, &patches, &vars_map, &profiles)?;
 
         // Write to .dots directory
-        let source_name = full.source.as_ref()
+        let source_name = dot.source.as_ref()
             .map(|p| p.to_string_lossy().to_string())
             .unwrap_or_else(|| target.file_name()
                 .map(|n| n.to_string_lossy().to_string())
@@ -125,11 +115,11 @@ impl DotInstaller for PatchInstaller {
 
 impl PatchInstaller {
     /// Load patch files from the patches directory or source.
-    fn load_patches(&self, full: &DotFull, dotfiles_dir: &Path) -> Result<Vec<LinePatch>> {
+    fn load_patches(&self, dot: &Dot, dotfiles_dir: &Path) -> Result<Vec<LinePatch>> {
         let mut patches = Vec::new();
 
         // Load from patches directory if specified
-        if let Some(patches_dir) = &full.patches {
+        if let Some(patches_dir) = &dot.patches {
             let patches_path = dotfiles_dir.join(patches_dir);
             if patches_path.is_dir() {
                 let mut entries: Vec<_> = fs::read_dir(&patches_path)
@@ -156,7 +146,7 @@ impl PatchInstaller {
         }
 
         // Load from source if specified (single patch file)
-        if let Some(source) = &full.source {
+        if let Some(source) = &dot.source {
             let source_path = dotfiles_dir.join(source);
             if source_path.exists() && source_path.extension().map(|e| e == "toml").unwrap_or(false) {
                 let patch = self.load_patch_file(&source_path)?;

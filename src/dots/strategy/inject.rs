@@ -31,17 +31,7 @@ impl DotInstaller for InjectInstaller {
         dotfiles_dir: &Path,
         vars: &tera::Context,
     ) -> Result<InstallResult> {
-        let full = match dot {
-            Dot::Full(full) => full,
-            Dot::Simple { .. } => {
-                return Err(BombadilError::ConfigInvalid {
-                    message: "Inject strategy requires full dot configuration".to_string(),
-                    help: Some("Use strategy = \"inject\" with prepend/append fields".to_string()),
-                });
-            }
-        };
-
-        let target = full.target.as_ref().ok_or_else(|| BombadilError::ConfigInvalid {
+        let target = dot.target.as_ref().ok_or_else(|| BombadilError::ConfigInvalid {
             message: "Dot missing target path".to_string(),
             help: Some("Add a 'target' field to the dot configuration".to_string()),
         })?;
@@ -49,7 +39,7 @@ impl DotInstaller for InjectInstaller {
         let target_path = resolve_path(target);
 
         // Get custom marker or use default
-        let marker = full.marker.as_deref().unwrap_or("BOMBADIL");
+        let marker = dot.marker.as_deref().unwrap_or("BOMBADIL");
         let marker_start = format!("### {} MANAGED START ###", marker);
         let marker_end = format!("### {} MANAGED END ###", marker);
 
@@ -78,7 +68,7 @@ impl DotInstaller for InjectInstaller {
         let mut new_content = String::new();
 
         // Add prepend content
-        if let Some(prepend_path) = &full.prepend {
+        if let Some(prepend_path) = &dot.prepend {
             let prepend_source = dotfiles_dir.join(prepend_path);
             if prepend_source.exists() {
                 let prepend_content = render::render_file(
@@ -103,7 +93,7 @@ impl DotInstaller for InjectInstaller {
         new_content.push_str(&cleaned);
 
         // Add append content
-        if let Some(append_path) = &full.append {
+        if let Some(append_path) = &dot.append {
             let append_source = dotfiles_dir.join(append_path);
             if append_source.exists() {
                 let append_content = render::render_file(
@@ -222,7 +212,7 @@ fn extract_vars_from_context(context: &tera::Context) -> HashMap<String, String>
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::DotFull;
+    use crate::config::Dot;
     use tempfile::TempDir;
 
     #[test]
@@ -318,7 +308,7 @@ user content
         context.insert("value", "test");
         context.insert("profiles", &Vec::<String>::new());
 
-        let full = DotFull {
+        let full = Dot {
             source: None,
             target: Some(target_file.clone()),
             strategy: crate::config::DotStrategy::Inject,
@@ -335,7 +325,7 @@ user content
 
         let installer = InjectInstaller;
         let result = installer
-            .install(&Dot::Full(full), dir.path(), &context)
+            .install(&full, dir.path(), &context)
             .unwrap();
 
         assert_eq!(result, InstallResult::Created);
@@ -359,7 +349,7 @@ user content
         let mut context = tera::Context::new();
         context.insert("profiles", &Vec::<String>::new());
 
-        let full = DotFull {
+        let full = Dot {
             source: None,
             target: Some(target_file.clone()),
             strategy: crate::config::DotStrategy::Inject,
@@ -376,7 +366,7 @@ user content
 
         let installer = InjectInstaller;
         let result = installer
-            .install(&Dot::Full(full), dir.path(), &context)
+            .install(&full, dir.path(), &context)
             .unwrap();
 
         assert_eq!(result, InstallResult::Updated); // Existing file modified with managed section
@@ -399,7 +389,7 @@ user content
         let mut context = tera::Context::new();
         context.insert("profiles", &Vec::<String>::new());
 
-        let full = DotFull {
+        let full = Dot {
             source: None,
             target: Some(target_file.clone()),
             strategy: crate::config::DotStrategy::Inject,
@@ -417,11 +407,11 @@ user content
         let installer = InjectInstaller;
 
         // First install
-        installer.install(&Dot::Full(full.clone()), dir.path(), &context).unwrap();
+        installer.install(&full, dir.path(), &context).unwrap();
         let first_content = fs::read_to_string(&target_file).unwrap();
 
         // Second install (should be unchanged)
-        let result = installer.install(&Dot::Full(full), dir.path(), &context).unwrap();
+        let result = installer.install(&full, dir.path(), &context).unwrap();
 
         assert_eq!(result, InstallResult::Unchanged);
 

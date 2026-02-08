@@ -173,10 +173,10 @@ pub fn resolve_dotfiles_dir(config: &Config, config_path: &Path) -> PathBuf {
             if resolved.is_absolute() {
                 resolved
             } else {
-                // Relative to config file's parent
-                config_path
-                    .parent()
-                    .unwrap_or(Path::new("."))
+                // Relative to $HOME (matching v3 behavior where `dotfiles_dir = "dotfiles"`
+                // means `$HOME/dotfiles`)
+                dirs::home_dir()
+                    .unwrap_or_else(|| PathBuf::from("."))
                     .join(resolved)
             }
         }
@@ -304,12 +304,7 @@ mod tests {
         let config = load_config_resolved(&main_config_path).unwrap();
         let dot = config.settings.dots.get("shared").unwrap();
         // Main config wins over import
-        match dot {
-            Dot::Simple { source, .. } => {
-                assert_eq!(source, &PathBuf::from("main/config"));
-            }
-            _ => panic!("Expected simple dot"),
-        }
+        assert_eq!(dot.source.as_ref().unwrap(), &PathBuf::from("main/config"));
     }
 
     #[test]

@@ -208,11 +208,7 @@ impl From<&Bombadil> for BombadilState {
 
         // Also collect targets from v4 dots
         for dot in current.v4_dots.values() {
-            let target = match dot {
-                config::Dot::Simple { target, .. } => Some(config::resolve_path(target)),
-                config::Dot::Full(full) => full.target.as_ref().map(|t| config::resolve_path(t)),
-            };
-            if let Some(t) = target {
+            if let Some(t) = dot.target.as_ref().map(|t| config::resolve_path(t)) {
                 symlinks.insert(t);
             }
         }
@@ -290,8 +286,12 @@ impl Dot {
             match vars.to_dot(source, profiles) {
                 Ok(content) if target.exists() => self.update(source, target, content),
                 Ok(content) => self.create(source, target, content),
-                Err(_) if target.exists() => self.update_raw(source, target),
-                Err(_) => {
+                Err(ref err) if target.exists() => {
+                    tracing::warn!(source = %source.display(), error = %err, "Template rendering failed, copying raw");
+                    self.update_raw(source, target)
+                }
+                Err(err) => {
+                    tracing::warn!(source = %source.display(), error = %err, "Template rendering failed, copying raw");
                     fs::copy(source, target)?;
                     Ok(LinkResult::Created)
                 }
@@ -2195,10 +2195,7 @@ impl Bombadil {
 
         // Install each v4 dot using strategy dispatch
         for (key, dot) in &self.v4_dots {
-            let dot_strategy = match dot {
-                config::Dot::Simple { .. } => config::DotStrategy::Full,
-                config::Dot::Full(full) => full.strategy.clone(),
-            };
+            let dot_strategy = dot.strategy.clone();
 
             // Build per-dot context with local vars
             let dot_context = self.build_dot_context(dot, &context);
@@ -2214,12 +2211,9 @@ impl Bombadil {
                     Box::new(dots::strategy::inject::InjectInstaller)
                 }
                 config::DotStrategy::SemanticPatch => {
-                    let format = match dot {
-                        config::Dot::Full(full) => full.target.as_ref()
-                            .map(|t| dots::strategy::semantic::SemanticInstaller::detect_format(t))
-                            .unwrap_or_default(),
-                        _ => config::SemanticFormat::default(),
-                    };
+                    let format = dot.target.as_ref()
+                        .map(|t| dots::strategy::semantic::SemanticInstaller::detect_format(t))
+                        .unwrap_or_default();
                     Box::new(dots::strategy::semantic::SemanticInstaller::new(format))
                 }
             };
@@ -2261,24 +2255,22 @@ impl Bombadil {
 
         // Handle hard copy targets as post-step
         for (_key, dot) in &self.v4_dots {
-            if let config::Dot::Full(full) = dot {
-                if let Some(hard_copy_target) = &full.hard_copy_target {
-                    if let Some(source) = &full.source {
-                        let copy_path = self.dotfiles_dir.join(".dots").join(source);
-                        if copy_path.exists() {
-                            let target = config::resolve_path(hard_copy_target);
-                            if let Some(parent) = target.parent() {
-                                let _ = fs::create_dir_all(parent);
-                            }
-                            let _ = fs::copy(&copy_path, &target);
+            if let Some(hard_copy_target) = &dot.hard_copy_target {
+                if let Some(source) = &dot.source {
+                    let copy_path = self.dotfiles_dir.join(".dots").join(source);
+                    if copy_path.exists() {
+                        let target = config::resolve_path(hard_copy_target);
+                        if let Some(parent) = target.parent() {
+                            let _ = fs::create_dir_all(parent);
+                        }
+                        let _ = fs::copy(&copy_path, &target);
 
-                            if let Some(perms) = full.hard_copy_permissions {
-                                use std::os::unix::fs::PermissionsExt;
-                                let _ = fs::set_permissions(
-                                    &target,
-                                    fs::Permissions::from_mode(perms),
-                                );
-                            }
+                        if let Some(perms) = dot.hard_copy_permissions {
+                            use std::os::unix::fs::PermissionsExt;
+                            let _ = fs::set_permissions(
+                                &target,
+                                fs::Permissions::from_mode(perms),
+                            );
                         }
                     }
                 }
@@ -2328,22 +2320,23 @@ impl Bombadil {
         let mut ctx = base_ctx.clone();
 
         // Load local vars if configured
-        let local_vars_path = match dot {
-            config::Dot::Full(full) => full.vars.as_ref().map(|v| self.dotfiles_dir.join(v)),
-            config::Dot::Simple { source, .. } => {
-                // Check for vars.toml next to the source
-                let source_path = self.dotfiles_dir.join(source);
-                let vars_path = if source_path.is_dir() {
-                    source_path.join("vars.toml")
-                } else {
-                    source_path.parent().map(|p| p.join("vars.toml")).unwrap_or_default()
-                };
-                if vars_path.exists() {
-                    Some(vars_path)
-                } else {
-                    None
-                }
+        let local_vars_path = if let Some(v) = &dot.vars {
+            Some(self.dotfiles_dir.join(v))
+        } else if let Some(source) = &dot.source {
+            // Check for vars.toml next to the source
+            let source_path = self.dotfiles_dir.join(source);
+            let vars_path = if source_path.is_dir() {
+                source_path.join("vars.toml")
+            } else {
+                source_path.parent().map(|p| p.join("vars.toml")).unwrap_or_default()
+            };
+            if vars_path.exists() {
+                Some(vars_path)
+            } else {
+                None
             }
+        } else {
+            None
         };
 
         if let Some(vars_path) = local_vars_path {
@@ -2380,9 +2373,10 @@ impl Bombadil {
                         // Create new dot entry from override
                         self.v4_dots.insert(
                             key.clone(),
-                            config::Dot::Simple {
-                                source: source.clone(),
-                                target: target.clone(),
+                            config::Dot {
+                                source: Some(source.clone()),
+                                target: Some(target.clone()),
+                                ..Default::default()
                             },
                         );
                     }
@@ -2604,88 +2598,52 @@ fn resolve_var_refs(vars: &mut HashMap<String, String>) {
 
 /// Convert a v4 `config::Dot` to a v3 `settings::dots::Dot` for backwards compatibility.
 fn v3_dot_from_v4(dot: &config::Dot) -> Option<Dot> {
-    match dot {
-        config::Dot::Simple { source, target } => Some(Dot {
-            source: source.clone(),
-            target: target.clone(),
-            ignore: vec![],
-            vars: Dot::default_vars(),
-            hard_copy_target: None,
-            hard_copy_permissions: None,
-        }),
-        config::Dot::Full(full) => {
-            let source = full.source.clone()?;
-            let target = full.target.clone()?;
-            Some(Dot {
-                source,
-                target,
-                ignore: full.ignore.clone(),
-                vars: full.vars.clone().unwrap_or_else(Dot::default_vars),
-                hard_copy_target: full.hard_copy_target.clone(),
-                hard_copy_permissions: full.hard_copy_permissions,
-            })
-        }
-    }
+    let source = dot.source.clone()?;
+    let target = dot.target.clone()?;
+    Some(Dot {
+        source,
+        target,
+        ignore: dot.ignore.clone(),
+        vars: dot.vars.clone().unwrap_or_else(Dot::default_vars),
+        hard_copy_target: dot.hard_copy_target.clone(),
+        hard_copy_permissions: dot.hard_copy_permissions,
+    })
 }
 
 /// Apply a v4 profile dot override to an existing v4 dot.
 fn apply_v4_dot_override(dot: &mut config::Dot, overrides: &config::DotOverride) {
-    match dot {
-        config::Dot::Simple { source, target } => {
-            if let Some(new_source) = &overrides.source {
-                *source = new_source.clone();
-            }
-            if let Some(new_target) = &overrides.target {
-                *target = new_target.clone();
-            }
-        }
-        config::Dot::Full(full) => {
-            if let Some(new_source) = &overrides.source {
-                full.source = Some(new_source.clone());
-            }
-            if let Some(new_target) = &overrides.target {
-                full.target = Some(new_target.clone());
-            }
-            if let Some(new_strategy) = &overrides.strategy {
-                full.strategy = new_strategy.clone();
-            }
-            if !overrides.ignore.is_empty() {
-                full.ignore = overrides.ignore.clone();
-            }
-            if let Some(new_vars) = &overrides.vars {
-                full.vars = Some(new_vars.clone());
-            }
-            if let Some(new_hct) = &overrides.hard_copy_target {
-                full.hard_copy_target = Some(new_hct.clone());
-            }
-            if let Some(new_hcp) = &overrides.hard_copy_permissions {
-                full.hard_copy_permissions = Some(*new_hcp);
-            }
-        }
+    if let Some(new_source) = &overrides.source {
+        dot.source = Some(new_source.clone());
+    }
+    if let Some(new_target) = &overrides.target {
+        dot.target = Some(new_target.clone());
+    }
+    if let Some(new_strategy) = &overrides.strategy {
+        dot.strategy = new_strategy.clone();
+    }
+    if !overrides.ignore.is_empty() {
+        dot.ignore = overrides.ignore.clone();
+    }
+    if let Some(new_vars) = &overrides.vars {
+        dot.vars = Some(new_vars.clone());
+    }
+    if let Some(new_hct) = &overrides.hard_copy_target {
+        dot.hard_copy_target = Some(new_hct.clone());
+    }
+    if let Some(new_hcp) = &overrides.hard_copy_permissions {
+        dot.hard_copy_permissions = Some(*new_hcp);
     }
 }
 
 /// Extract display-friendly source and target paths from a v4 dot.
 fn dot_display_paths(dot: &config::Dot, dotfiles_dir: &Path) -> (String, String) {
-    match dot {
-        config::Dot::Simple { source, target } => (
-            dotfiles_dir.join(source).display().to_string(),
-            target.display().to_string(),
-        ),
-        config::Dot::Full(full) => {
-            let source_display = full
-                .source
-                .as_ref()
-                .map(|s| dotfiles_dir.join(s).display().to_string())
-                .unwrap_or_else(|| "<no source>".to_string());
-            let target_display = full
-                .target
-                .as_ref()
-                .map(|t| t.display().to_string())
-                .unwrap_or_else(|| "<no target>".to_string());
-            (source_display, target_display)
-        }
-    }
+    let source_display = dot.source.as_ref()
+        .map(|s| dotfiles_dir.join(s).display().to_string())
+        .unwrap_or_else(|| "<no source>".to_string());
+    let target_display = dot.target.as_ref()
+        .map(|t: &PathBuf| t.display().to_string())
+        .unwrap_or_else(|| "<no target>".to_string());
+    (source_display, target_display)
 }
 
 #[cfg(test)]
