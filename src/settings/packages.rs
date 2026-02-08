@@ -111,8 +111,11 @@ pub enum CargoConfig {
     Simple(String),
     /// Extended configuration
     Extended {
-        /// Crate name or git URL
+        /// Crate name or git URL (v3 format)
         crate_name: Option<String>,
+        /// Crate name (v4 format alias for crate_name)
+        #[serde(default)]
+        name: Option<String>,
         /// Git repository URL
         #[serde(default)]
         git: Option<String>,
@@ -136,9 +139,10 @@ impl CargoConfig {
     pub fn package_name(&self) -> &str {
         match self {
             CargoConfig::Simple(name) => name,
-            CargoConfig::Extended { crate_name, bin, .. } => {
+            CargoConfig::Extended { crate_name, name, bin, .. } => {
                 bin.as_deref()
                     .or(crate_name.as_deref())
+                    .or(name.as_deref())
                     .unwrap_or("unknown")
             }
         }
@@ -150,6 +154,7 @@ impl CargoConfig {
             CargoConfig::Simple(name) => vec![name.clone()],
             CargoConfig::Extended {
                 crate_name,
+                name,
                 git,
                 branch,
                 tag,
@@ -170,8 +175,8 @@ impl CargoConfig {
                         args.push("--tag".to_string());
                         args.push(tag.clone());
                     }
-                } else if let Some(name) = crate_name {
-                    args.push(name.clone());
+                } else if let Some(pkg_name) = crate_name.as_ref().or(name.as_ref()) {
+                    args.push(pkg_name.clone());
                 }
 
                 if !features.is_empty() {

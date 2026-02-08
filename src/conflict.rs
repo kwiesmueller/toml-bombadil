@@ -219,7 +219,11 @@ impl Conflict {
         io::stdout().flush()?;
 
         let mut input = String::new();
-        io::stdin().lock().read_line(&mut input)?;
+        let bytes_read = io::stdin().lock().read_line(&mut input)?;
+        if bytes_read == 0 {
+            // EOF on stdin (non-interactive context) - default to skip
+            return Ok(ConflictResolution::Skip);
+        }
 
         match input.trim() {
             "d" => Ok(ConflictResolution::UseDotfile),

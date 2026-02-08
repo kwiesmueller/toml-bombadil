@@ -379,7 +379,7 @@ user content
             .install(&Dot::Full(full), dir.path(), &context)
             .unwrap();
 
-        assert_eq!(result, InstallResult::Created); // First time adding managed section
+        assert_eq!(result, InstallResult::Updated); // Existing file modified with managed section
 
         let content = fs::read_to_string(&target_file).unwrap();
         assert!(content.contains("# User config"));

@@ -7,10 +7,24 @@ use config::{Config, File};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
+use tracing::{debug, warn};
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
-pub struct ImportPath {
-    path: PathBuf,
+#[serde(untagged)]
+pub enum ImportPath {
+    /// Plain string path (v4 format): `import = ["path/to/file.toml"]`
+    Simple(PathBuf),
+    /// Struct with path field (v3 format): `import = [{path = "path/to/file.toml"}]`
+    Struct { path: PathBuf },
+}
+
+impl ImportPath {
+    pub fn path(&self) -> &PathBuf {
+        match self {
+            ImportPath::Simple(p) => p,
+            ImportPath::Struct { path } => path,
+        }
+    }
 }
 
 /// An imported configuration, same as `Settings` but without `dotfiles_dir`
@@ -39,7 +53,7 @@ impl Settings {
         let import_paths: Vec<PathBuf> = self
             .import
             .iter()
-            .map(|import| import.path.clone())
+            .map(|import| import.path().clone())
             .map(|path| {
                 if path.is_absolute() {
                     absolute_paths.insert(path.to_owned(), true);
@@ -118,22 +132,18 @@ impl Settings {
                 let parent_path = sub_settings.source_path.parent().unwrap();
                 key = parent_path.join(key).to_str().unwrap().to_owned();
                 dot_with_sub_path.source = parent_path.join(&value.source);
-                println!(
-                    "Overwriting source_path {} to {:?}",
-                    &value.source.display(),
-                    dot_with_sub_path.source
+                debug!(
+                    original = %value.source.display(),
+                    resolved = ?dot_with_sub_path.source,
+                    "Resolving relative source path"
                 );
             }
             if self.settings.dots.contains_key(&key) {
-                eprintln!(
-                    "{} {}",
-                    "Duplicate key in imports \"{}\", skipping".red(),
-                    key
-                );
+                warn!(key = %key, "Duplicate key in imports, skipping");
                 continue;
             }
             if let Some(hard_copy_target) = &dot_with_sub_path.hard_copy_target {
-                println!("Hard copy target {:?}", hard_copy_target);
+                debug!(target = ?hard_copy_target, "Hard copy target configured");
             }
             self.settings.dots.insert(key.to_owned(), dot_with_sub_path);
         }

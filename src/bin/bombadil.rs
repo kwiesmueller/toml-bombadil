@@ -15,7 +15,6 @@ use toml_bombadil::packages::persist::{
 use toml_bombadil::packages::state::PackagesState;
 use toml_bombadil::packages::{InstallStatus, PackageManager, RemoveStatus};
 use toml_bombadil::platform::PlatformContext;
-use toml_bombadil::settings::profiles;
 use toml_bombadil::settings::Settings;
 use toml_bombadil::validate;
 use toml_bombadil::{Bombadil, MetadataType, Mode};
@@ -58,9 +57,18 @@ fn load_profile_names() -> PossibleValuesParser {
             .keys()
             .map(|s| &*Box::leak(s.clone().into_boxed_str()))
             .collect(),
-        Err(_) => profiles().to_vec(),
+        Err(_) => vec![],
     };
     PossibleValuesParser::new(names)
+}
+
+/// Get dotfiles path from v4 config, falling back to v3 Settings.
+fn get_dotfiles_path() -> Result<PathBuf> {
+    let config_path = toml_bombadil::config::config_path()
+        .map_err(|e| anyhow::anyhow!("Failed to find config: {}", e))?;
+    let config = toml_bombadil::config::load_config_resolved(&config_path)
+        .map_err(|e| anyhow::anyhow!("Failed to load config: {}", e))?;
+    Ok(toml_bombadil::config::resolve_dotfiles_dir(&config, &config_path))
 }
 
 /// Toml is a dotfile template manager, written in rust.
@@ -367,10 +375,10 @@ async fn main() -> Result<()> {
             review,
         } => {
             let mut bombadil =
-                Bombadil::from_settings(Mode::Gpg).unwrap_or_else(|err| fatal!("{}", err));
+                Bombadil::load(Mode::Gpg).unwrap_or_else(|err| fatal!("{}", err));
 
             bombadil
-                .enable_profiles(profiles.iter().map(String::as_str).collect())
+                .enable_profiles_v4(profiles.iter().map(String::as_str).collect())
                 .unwrap_or_else(|err| fatal!("{}", err));
 
             // Determine conflict strategy
@@ -410,7 +418,7 @@ async fn main() -> Result<()> {
             Bombadil::watch(profiles).await?;
         }
         Cli::Unlink => {
-            Bombadil::from_settings(Mode::NoGpg)
+            Bombadil::load(Mode::NoGpg)
                 .and_then(|bombadil| bombadil.uninstall())
                 .unwrap_or_else(|err| fatal!("{}", err));
         }
@@ -444,7 +452,7 @@ async fn main() -> Result<()> {
                 )
             }
 
-            Bombadil::from_settings(Mode::Gpg)
+            Bombadil::load(Mode::Gpg)
                 .and_then(|bombadil| bombadil.add_secret(&key, &value, &var_file))
                 .unwrap_or_else(|err| fatal!("{}", err));
         }
@@ -478,13 +486,13 @@ async fn main() -> Result<()> {
             };
 
             let mut bombadil = match metadata_type {
-                MetadataType::Secrets => Bombadil::from_settings(Mode::Gpg),
-                _ => Bombadil::from_settings(Mode::NoGpg),
+                MetadataType::Secrets => Bombadil::load(Mode::Gpg),
+                _ => Bombadil::load(Mode::NoGpg),
             }
             .unwrap_or_else(|err| fatal!("{}", err));
 
             bombadil
-                .enable_profiles(profiles.iter().map(String::as_str).collect())
+                .enable_profiles_v4(profiles.iter().map(String::as_str).collect())
                 .unwrap_or_else(|err| fatal!("{}", err));
 
             bombadil
@@ -499,11 +507,7 @@ async fn main() -> Result<()> {
             let dotfiles_path = match path {
                 Some(p) => p,
                 None => {
-                    // Use the configured dotfiles path from settings
-                    let config = toml_bombadil::settings::Settings::get()
-                        .unwrap_or_else(|err| fatal!("{}", err));
-                    config
-                        .get_dotfiles_path()
+                    get_dotfiles_path()
                         .unwrap_or_else(|err| fatal!("{}", err))
                 }
             };
@@ -572,8 +576,7 @@ async fn main() -> Result<()> {
             }
         }
         Cli::Log { limit, file, dot, verbose } => {
-            let settings = Settings::get().unwrap_or_else(|err| fatal!("{}", err));
-            let dotfiles_path = settings.get_dotfiles_path().unwrap_or_else(|err| fatal!("{}", err));
+            let dotfiles_path = get_dotfiles_path().unwrap_or_else(|err| fatal!("{}", err));
             let storage = AuditStorage::new(&dotfiles_path);
 
             let sessions = storage.list_sessions()
@@ -634,8 +637,7 @@ async fn main() -> Result<()> {
             print_legend();
         }
         Cli::Inspect { action_id, view, file, diff: show_diff, log: show_log } => {
-            let settings = Settings::get().unwrap_or_else(|err| fatal!("{}", err));
-            let dotfiles_path = settings.get_dotfiles_path().unwrap_or_else(|err| fatal!("{}", err));
+            let dotfiles_path = get_dotfiles_path().unwrap_or_else(|err| fatal!("{}", err));
             let storage = AuditStorage::new(&dotfiles_path);
 
             // File history mode
@@ -746,8 +748,7 @@ async fn main() -> Result<()> {
             }
         }
         Cli::Revert { action_id, force, dry_run, file, to, continue_on_error } => {
-            let settings = Settings::get().unwrap_or_else(|err| fatal!("{}", err));
-            let dotfiles_path = settings.get_dotfiles_path().unwrap_or_else(|err| fatal!("{}", err));
+            let dotfiles_path = get_dotfiles_path().unwrap_or_else(|err| fatal!("{}", err));
             let storage = AuditStorage::new(&dotfiles_path);
 
             // File revert mode

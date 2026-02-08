@@ -2965,7 +2965,7 @@ mod tests {
 
         assert_that!(expected_backup_path).does_not_exist();
 
-        bombadil.install()?;
+        bombadil.install_with_strategy(ConflictStrategy::DotfileWins)?;
 
         assert_that!(expected_backup_path).exists();
 
