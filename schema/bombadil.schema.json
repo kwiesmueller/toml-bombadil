@@ -152,36 +152,7 @@
       ]
     },
     "Dot": {
-      "description": "A dotfile entry describing how to manage a config file or directory.",
-      "anyOf": [
-        {
-          "description": "Simple dot with just source and target.",
-          "type": "object",
-          "required": [
-            "source",
-            "target"
-          ],
-          "properties": {
-            "source": {
-              "type": "string"
-            },
-            "target": {
-              "type": "string"
-            }
-          }
-        },
-        {
-          "description": "Full dot with all options.",
-          "allOf": [
-            {
-              "$ref": "#/definitions/DotFull"
-            }
-          ]
-        }
-      ]
-    },
-    "DotFull": {
-      "description": "Full dotfile configuration with all available options.",
+      "description": "A dotfile entry describing how to manage a config file or directory.\n\nSimple dots need only `source` and `target`. Strategy-specific fields (base, patches, prepend, append, marker) are used by their respective strategies.",
       "type": "object",
       "properties": {
         "append": {
@@ -252,6 +223,7 @@
         },
         "source": {
           "description": "Source path relative to dotfiles directory.",
+          "default": null,
           "type": [
             "string",
             "null"
@@ -268,6 +240,7 @@
         },
         "target": {
           "description": "Target path (supports ~ expansion).",
+          "default": null,
           "type": [
             "string",
             "null"
