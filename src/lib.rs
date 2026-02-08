@@ -1,10 +1,13 @@
 use self::settings::profiles::Profile;
-use crate::conflict::{Conflict, ConflictContext, ConflictResolution, ConflictStrategy};
-use crate::dots::{DotVar, LinkResult};
+use crate::audit::{
+    ActionPlan, ActionType as AuditActionType, AuditStorage, PlannedAction, Session,
+};
+use crate::conflict::{
+    Conflict, ConflictContext, ConflictResolution, ConflictStrategy, ReviewChange, ReviewContext,
+};
 use crate::gpg::Gpg;
 use crate::hook::Hook;
 use crate::paths::{unlink, DotPaths};
-use crate::state::BombadilState;
 use crate::templating::Variables;
 use anyhow::{anyhow, Context, Result};
 use colored::*;
@@ -12,6 +15,7 @@ use ignore_files::IgnoreFilter;
 use settings::dots::Dot;
 use settings::Settings;
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::io::Write;
 use std::os::unix;
 use std::path::{Path, PathBuf};
@@ -19,7 +23,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use std::{fs, io};
 use watchexec::{
-    action::{Action, Outcome},
+    action::{Action as WatchAction, Outcome},
     config::{InitConfig, RuntimeConfig},
     error::RuntimeError,
     event::{filekind::FileEventKind, Tag},
@@ -29,20 +33,329 @@ use watchexec::{
 };
 use watchexec_filterer_ignore::IgnoreFilterer;
 
+pub mod audit;
 pub mod conflict;
-mod dots;
 mod error;
-mod git;
 mod gpg;
 mod hook;
+pub mod packages;
 pub mod paths;
 pub mod platform;
 pub mod settings;
-mod state;
 mod templating;
 pub mod validate;
 
+// v4 new modules
+pub mod config;
+pub mod core;
+pub mod dots;
+
+// Re-export drift detection from packages (v4)
+pub use packages::drift;
+pub use packages::managers;
+
 pub(crate) const BOMBADIL_CONFIG: &str = "bombadil.toml";
+const STATE_FILE: &str = "previous_state.toml";
+
+/// Result of linking a dotfile.
+#[derive(PartialEq, Eq, Debug)]
+pub enum LinkResult {
+    Updated,
+    Created,
+    Ignored,
+    Unchanged,
+}
+
+/// Trait for accessing dot variable paths.
+pub(crate) trait DotVar {
+    fn vars(&self) -> Option<PathBuf>;
+    fn get_source(&self) -> Option<&PathBuf>;
+
+    fn is_default_var_path(&self) -> bool {
+        self.vars() == Some(Dot::default_vars())
+    }
+
+    fn resolve_from_source(&self, source: &Path, path: &Path) -> Option<PathBuf> {
+        let relative_to_dot = settings::dotfile_dir().join(source).join(path);
+        let relative_to_dotfile_dir = settings::dotfile_dir().join(path);
+
+        if relative_to_dot.exists() {
+            Some(relative_to_dot)
+        } else if let Some(parent) = source.parent() {
+            if parent.join(path).exists() {
+                Some(parent.join(path))
+            } else if relative_to_dotfile_dir.exists() && !self.is_default_var_path() {
+                Some(relative_to_dotfile_dir)
+            } else {
+                self.vars_path_not_found(source, path)
+            }
+        } else {
+            self.vars_path_not_found(source, path)
+        }
+    }
+
+    fn vars_path_not_found(&self, source: &Path, path: &Path) -> Option<PathBuf> {
+        if !self.is_default_var_path() {
+            eprintln!(
+                "{} {:?} {} {:?} {} {:?}",
+                "WARNING: Variable path".yellow(),
+                path,
+                "was neither found in".yellow(),
+                source,
+                "nor in".yellow(),
+                settings::dotfile_dir()
+            );
+        }
+        None
+    }
+}
+
+impl DotVar for Dot {
+    fn vars(&self) -> Option<PathBuf> {
+        Some(self.vars.clone())
+    }
+
+    fn get_source(&self) -> Option<&PathBuf> {
+        Some(&self.source)
+    }
+}
+
+impl DotVar for settings::dots::DotOverride {
+    fn vars(&self) -> Option<PathBuf> {
+        self.vars.clone()
+    }
+
+    fn get_source(&self) -> Option<&PathBuf> {
+        self.source.as_ref()
+    }
+}
+
+impl settings::dots::DotOverride {
+    pub(crate) fn resolve_var_path(&self, origin: Option<&PathBuf>) -> Option<PathBuf> {
+        let source = match (self.get_source(), origin) {
+            (Some(source), _) => source,
+            (None, Some(origin)) => origin,
+            _ => panic!("Dot has no source path"),
+        };
+
+        let vars = self.vars().unwrap_or_else(Dot::default_vars);
+        self.resolve_from_source(source, &vars)
+    }
+}
+
+/// State tracking for installed symlinks.
+#[derive(Debug, serde::Deserialize, serde::Serialize)]
+pub(crate) struct BombadilState {
+    #[serde(skip)]
+    pub path: PathBuf,
+    pub symlinks: HashSet<PathBuf>,
+}
+
+impl BombadilState {
+    pub fn read(path: PathBuf) -> Result<Self> {
+        let state_path = path.join(".dots").join(STATE_FILE);
+
+        if state_path.exists() {
+            ::config::Config::builder()
+                .add_source(::config::File::from(state_path))
+                .build()?
+                .try_deserialize::<BombadilState>()
+                .map_err(|err| anyhow!("{} : {}", "Previous state format error".red(), err))
+        } else {
+            Err(anyhow!(
+                "Unable to find Previous state file {}",
+                state_path.display()
+            ))
+        }
+    }
+
+    pub fn write(&self) -> Result<()> {
+        let content = toml::to_string(&self)?;
+        fs::write(&self.path, content)?;
+        fs::File::open(&self.path)?.sync_data()?;
+        Ok(())
+    }
+
+    pub fn remove_targets(&self) -> Vec<Result<PathBuf>> {
+        let mut unlink_results = vec![];
+
+        self.symlinks.iter().for_each(|path| {
+            unlink_results.push(
+                unlink(path)
+                    .map(|_| path.to_owned())
+                    .map_err(|err| anyhow!("Failed to unlink dot entry {:?} : {}", path, err)),
+            );
+        });
+
+        unlink_results
+    }
+}
+
+impl From<&Bombadil> for BombadilState {
+    fn from(current: &Bombadil) -> Self {
+        let path = current
+            .dotfiles_absolute_path()
+            .unwrap()
+            .join(".dots")
+            .join(STATE_FILE);
+        let symlinks = current
+            .dots
+            .iter()
+            .map(|dot| dot.1.target().unwrap())
+            .collect();
+
+        Self { path, symlinks }
+    }
+}
+
+impl Dot {
+    pub(crate) fn install(
+        &self,
+        vars: &Variables,
+        auto_ignored: Vec<PathBuf>,
+        profiles: &[String],
+    ) -> Result<LinkResult> {
+        let source = &self.source()?;
+        let target = &self.build_copy_path();
+        let source_str = source.to_str().unwrap_or_default();
+
+        let ignored_paths = if self.ignore.is_empty() {
+            auto_ignored
+        } else {
+            let mut ignored_paths = self.get_ignored_paths(source_str)?;
+            ignored_paths.extend_from_slice(&auto_ignored);
+            ignored_paths
+        };
+
+        // Add local vars to the global ones
+        let mut vars = vars.clone();
+
+        if let Some(local_vars_path) = self.resolve_var_path() {
+            let local_vars = Dot::load_local_vars(&local_vars_path);
+            vars.extend(local_vars);
+        }
+
+        // Resolve % reference
+        vars.resolve_ref();
+
+        // Recursively copy dotfile to .dots directory
+        self.traverse_and_copy(source, target, ignored_paths.as_slice(), &vars, profiles)
+    }
+
+    fn load_local_vars(source: &Path) -> Variables {
+        Variables::from_toml(source).unwrap_or_else(|err| {
+            eprintln!("{}", err.to_string().yellow());
+            Variables::default()
+        })
+    }
+
+    fn get_ignored_paths(&self, source_str: &str) -> Result<Vec<PathBuf>> {
+        Ok(
+            globwalk::GlobWalkerBuilder::from_patterns(source_str, self.ignore.as_slice())
+                .build()?
+                .filter_map(Result::ok)
+                .map(|entry| entry.path().to_path_buf())
+                .collect(),
+        )
+    }
+
+    fn traverse_and_copy(
+        &self,
+        source: &PathBuf,
+        target: &PathBuf,
+        ignored: &[PathBuf],
+        vars: &Variables,
+        profiles: &[String],
+    ) -> Result<LinkResult> {
+        if ignored.contains(source) {
+            return Ok(LinkResult::Ignored);
+        }
+
+        // Single file : inject vars and write to .dots/
+        if source.is_file() {
+            fs::create_dir_all(target.parent().unwrap())?;
+            match vars.to_dot(source, profiles) {
+                Ok(content) if target.exists() => self.update(source, target, content),
+                Ok(content) => self.create(source, target, content),
+                Err(_) if target.exists() => self.update_raw(source, target),
+                Err(_) => {
+                    fs::copy(source, target)?;
+                    Ok(LinkResult::Created)
+                }
+            }
+        } else {
+            fs::create_dir_all(target)?;
+            let mut link_results = vec![];
+
+            for entry in source.read_dir()? {
+                let entry_path = &entry?.path();
+                let entry_name = entry_path.file_name().unwrap().to_str().unwrap();
+                let result = self.traverse_and_copy(
+                    &source.join(entry_name),
+                    &target.join(entry_name),
+                    ignored,
+                    vars,
+                    &[],
+                );
+
+                match result {
+                    Ok(result) => link_results.push(result),
+                    Err(err) => eprintln!("{err}"),
+                }
+            }
+
+            if link_results.contains(&LinkResult::Updated) {
+                Ok(LinkResult::Updated)
+            } else if link_results.contains(&LinkResult::Created) {
+                Ok(LinkResult::Created)
+            } else {
+                Ok(LinkResult::Unchanged)
+            }
+        }
+    }
+
+    fn create(&self, source: &PathBuf, target: &PathBuf, content: String) -> Result<LinkResult> {
+        use std::io::Write;
+        let permissions = fs::metadata(source)?.permissions();
+        let mut dot_copy = fs::File::create(target)?;
+        dot_copy.write_all(content.as_bytes())?;
+        dot_copy.set_permissions(permissions)?;
+        Ok(LinkResult::Created)
+    }
+
+    fn update(&self, source: &PathBuf, target: &PathBuf, content: String) -> Result<LinkResult> {
+        use std::io::Write;
+        let target_content = fs::read_to_string(target)?;
+        if target_content == content {
+            Ok(LinkResult::Unchanged)
+        } else {
+            let permissions = fs::metadata(source)?.permissions();
+            let mut dot_copy = fs::OpenOptions::new().write(true).truncate(true).open(target)?;
+            dot_copy.write_all(content.as_bytes())?;
+            dot_copy.set_permissions(permissions)?;
+            dot_copy.sync_data()?;
+            Ok(LinkResult::Updated)
+        }
+    }
+
+    fn update_raw(&self, source: &PathBuf, target: &PathBuf) -> Result<LinkResult> {
+        use std::io::Write;
+        let target_content = fs::read(target)?;
+        let content = fs::read(source)?;
+
+        if target_content == content {
+            Ok(LinkResult::Unchanged)
+        } else {
+            let permissions = fs::metadata(source)?.permissions();
+            let mut dot_copy = fs::OpenOptions::new().write(true).truncate(true).open(target)?;
+
+            dot_copy.write_all(&content)?;
+            dot_copy.set_permissions(permissions)?;
+            dot_copy.sync_data()?;
+            Ok(LinkResult::Updated)
+        }
+    }
+}
 
 /// The main crate struct, it contains all needed medata about a
 /// dotfile directory and how to install it.
@@ -73,28 +386,6 @@ pub enum Mode {
 }
 
 impl Bombadil {
-    /// Given a git remote address, will clone the repository to the target path
-    /// and install the dotfiles according to the "bombadil.toml" configuration inside the
-    /// repo root.
-    pub fn install_from_remote(
-        remote: &str,
-        path: PathBuf,
-        profiles: Option<Vec<&str>>,
-    ) -> Result<()> {
-        git::clone(remote, path.as_path())?;
-        Bombadil::link_self_config(Some(path.join(BOMBADIL_CONFIG)))?;
-
-        let mut bombadil = Bombadil::from_settings(Mode::Gpg)?;
-
-        if let Some(profiles) = profiles {
-            bombadil.enable_profiles(profiles)?;
-        }
-
-        bombadil.install()?;
-
-        Ok(())
-    }
-
     /// Symlink `bombadil.toml` to `$XDG_CONFIG/bombadil.toml` so we can later read it from there.
     pub fn link_self_config(dotfiles_path: Option<PathBuf>) -> Result<()> {
         // Get the provided path and attempt to resolve 'bombadil.toml' if it's a directory
@@ -292,10 +583,11 @@ impl Bombadil {
         match previous_state {
             Ok(previous_state) => {
                 let diff = previous_state.symlinks.difference(&new_state.symlinks);
+                let diff_vec: Vec<_> = diff.collect();
 
-                println!("Install diff: {:?}", diff);
+                tracing::debug!(orphans = ?diff_vec, "Checking for orphaned symlinks");
 
-                for orphan in diff {
+                for orphan in diff_vec {
                     if orphan.exists() {
                         if let Ok(canonicalized) = orphan.canonicalize() {
                             unlink(orphan).context(format!(
@@ -311,19 +603,1072 @@ impl Bombadil {
                                 "deleting `{}`",
                                 canonicalized.to_str().to_owned().unwrap().green()
                             ))?;
-                            println!("Deleted - {canonicalized:?} => {orphan:?}");
+                            tracing::info!(target = ?canonicalized, symlink = ?orphan, "Deleted orphaned symlink");
                         }
                     }
                 }
             }
             Err(err) => {
-                println!("No previous state: {err}")
+                tracing::debug!(error = %err, "No previous state found");
             }
         }
 
         new_state.write()?;
 
         Ok(())
+    }
+
+    /// Plan the installation without executing anything.
+    ///
+    /// Returns an ActionPlan that can be reviewed, modified, and then executed.
+    pub fn plan_install(&self, strategy: ConflictStrategy) -> Result<ActionPlan> {
+        self.check_dotfile_dir()?;
+
+        let mut plan = ActionPlan::new();
+        let _dot_copy_dir = self.path.join(".dots");
+
+        // Plan prehooks first (they run before dot operations)
+        for hook in &self.prehooks {
+            plan.add(PlannedAction::new(
+                AuditActionType::HookExecuted {
+                    command: hook.command.clone(),
+                    hook_type: crate::audit::HookType::PreInstall,
+                    exit_code: 0,
+                },
+                None,
+            ));
+        }
+
+        // Plan each dot
+        for (key, dot) in self.dots.iter() {
+            // Determine what the install would do
+            let source = match dot.source() {
+                Ok(s) => s,
+                Err(e) => {
+                    tracing::warn!(dot = %key, error = %e, "Skipping dot due to source error");
+                    continue;
+                }
+            };
+
+            let copy_path = dot.build_copy_path();
+            let target = match dot.target() {
+                Ok(t) => t,
+                Err(e) => {
+                    tracing::warn!(dot = %key, error = %e, "Skipping dot due to target error");
+                    continue;
+                }
+            };
+
+            // Determine action type based on current state
+            let action_type = if target.exists() {
+                // Check if this is a conflict
+                match Conflict::detect(key, &copy_path, &target, &source) {
+                    Ok(Some(_conflict)) => {
+                        // There's a conflict - plan resolution based on strategy
+                        match strategy {
+                            ConflictStrategy::DotfileWins => {
+                                // Will backup system file and use dotfile
+                                plan.add(PlannedAction::new(
+                                    AuditActionType::Backup {
+                                        original: target.clone(),
+                                        backup_location: self.backup_path(&target),
+                                        content_hash: self.hash_file_if_exists(&target),
+                                    },
+                                    Some(key.clone()),
+                                ));
+                                AuditActionType::FileUpdate {
+                                    target: target.clone(),
+                                    source: source.clone(),
+                                    before_hash: self.hash_file_if_exists(&target),
+                                    after_hash: String::new(), // Computed at execution
+                                }
+                            }
+                            ConflictStrategy::SystemWins => {
+                                // Will copy system content to dotfile source
+                                AuditActionType::ConflictResolved {
+                                    target: target.clone(),
+                                    resolution: crate::audit::ConflictResolution::UseSystem,
+                                    dotfile_hash: self.hash_file_if_exists(&source),
+                                    system_hash: self.hash_file_if_exists(&target),
+                                }
+                            }
+                            ConflictStrategy::Skip => {
+                                // Skip this dot
+                                continue;
+                            }
+                            ConflictStrategy::Interactive => {
+                                // Mark as conflict - will be resolved interactively
+                                AuditActionType::ConflictResolved {
+                                    target: target.clone(),
+                                    resolution: crate::audit::ConflictResolution::Pending,
+                                    dotfile_hash: self.hash_file_if_exists(&source),
+                                    system_hash: self.hash_file_if_exists(&target),
+                                }
+                            }
+                        }
+                    }
+                    Ok(None) => {
+                        // No conflict - regular update
+                        if target.is_symlink() {
+                            // Already a symlink, will update content
+                            AuditActionType::FileUpdate {
+                                target: target.clone(),
+                                source: source.clone(),
+                                before_hash: self.hash_file_if_exists(&copy_path),
+                                after_hash: String::new(),
+                            }
+                        } else {
+                            // Target exists but not a symlink - backup and link
+                            plan.add(PlannedAction::new(
+                                AuditActionType::Backup {
+                                    original: target.clone(),
+                                    backup_location: self.backup_path(&target),
+                                    content_hash: self.hash_file_if_exists(&target),
+                                },
+                                Some(key.clone()),
+                            ));
+                            AuditActionType::SymlinkCreate {
+                                source: copy_path.clone(),
+                                target: target.clone(),
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!(dot = %key, error = %e, "Error detecting conflict, will attempt link");
+                        AuditActionType::SymlinkCreate {
+                            source: copy_path.clone(),
+                            target: target.clone(),
+                        }
+                    }
+                }
+            } else if copy_path.exists() {
+                // Target doesn't exist but copy does - create symlink
+                AuditActionType::SymlinkCreate {
+                    source: copy_path.clone(),
+                    target: target.clone(),
+                }
+            } else {
+                // Neither exists - create new file and symlink
+                AuditActionType::FileCreate {
+                    target: target.clone(),
+                    source: source.clone(),
+                    content_hash: String::new(),
+                }
+            };
+
+            plan.add(PlannedAction::new(action_type, Some(key.clone())));
+        }
+
+        // Plan orphan cleanup
+        let absolute_path_to_dot = self.dotfiles_absolute_path()?;
+        if let Ok(previous_state) = BombadilState::read(absolute_path_to_dot.clone()) {
+            let new_state = BombadilState::from(self);
+            let orphans: Vec<_> = previous_state
+                .symlinks
+                .difference(&new_state.symlinks)
+                .filter(|p| p.exists())
+                .collect();
+
+            for orphan in orphans {
+                if let Ok(target) = orphan.canonicalize() {
+                    plan.add(PlannedAction::new(
+                        AuditActionType::SymlinkRemove {
+                            target: orphan.clone(),
+                            was_pointing_to: target,
+                        },
+                        None,
+                    ));
+                }
+            }
+        }
+
+        // Plan posthooks last (they run after dot operations)
+        for hook in &self.posthooks {
+            plan.add(PlannedAction::new(
+                AuditActionType::HookExecuted {
+                    command: hook.command.clone(),
+                    hook_type: crate::audit::HookType::PostInstall,
+                    exit_code: 0,
+                },
+                None,
+            ));
+        }
+
+        Ok(plan)
+    }
+
+    /// Execute a planned installation.
+    ///
+    /// Takes a previously created ActionPlan and executes the approved actions.
+    pub fn execute_install(&self, _plan: ActionPlan, profiles: Vec<String>) -> Result<Session> {
+        self.execute_install_with_strategy(_plan, profiles, ConflictStrategy::Interactive)
+    }
+
+    /// Execute a planned installation with a specific conflict strategy.
+    pub fn execute_install_with_strategy(
+        &self,
+        _plan: ActionPlan,
+        profiles: Vec<String>,
+        strategy: ConflictStrategy,
+    ) -> Result<Session> {
+        let dotfiles_path = self.dotfiles_absolute_path()?;
+        let storage = AuditStorage::new(&dotfiles_path);
+        storage.init()?;
+
+        let mut session = Session::new("link", profiles.clone());
+        let mut conflict_ctx = ConflictContext::new(strategy);
+
+        // Run prehooks
+        for hook in &self.prehooks {
+            match hook.run_capture() {
+                Ok(result) => {
+                    let action = crate::audit::Action::new(
+                        AuditActionType::HookExecuted {
+                            command: result.command.clone(),
+                            hook_type: crate::audit::HookType::PreInstall,
+                            exit_code: result.exit_code,
+                        },
+                        None,
+                    );
+
+                    // Save hook output as logs
+                    let log_content = format_hook_logs(&result);
+                    if !log_content.is_empty() {
+                        let _ = storage.save_logs(&action.id, &log_content);
+                    }
+
+                    session.add_action(action);
+
+                    if !result.success() {
+                        tracing::error!(
+                            command = %result.command,
+                            exit_code = result.exit_code,
+                            "Prehook failed"
+                        );
+                    }
+                }
+                Err(err) => {
+                    tracing::error!(error = %err, "Failed to run prehook");
+                }
+            }
+        }
+
+        let dot_copy_dir = self.path.join(".dots");
+        fs::create_dir_all(&dot_copy_dir)?;
+
+        // Execute each dot installation
+        for (key, dot) in self.dots.iter() {
+            // Use build_copy_path (doesn't require file to exist) for pre-check
+            let copy_path = dot.build_copy_path();
+            let target = match dot.target() {
+                Ok(t) => t,
+                Err(e) => {
+                    tracing::warn!(dot = %key, error = %e, "Skipping dot due to target error");
+                    continue;
+                }
+            };
+            let source = match dot.source() {
+                Ok(s) => s,
+                Err(e) => {
+                    tracing::warn!(dot = %key, error = %e, "Skipping dot due to source error");
+                    continue;
+                }
+            };
+
+            // Check for local modifications BEFORE rendering
+            // If target is a symlink to .dots/, the user may have modified it
+            let pre_render_content = if copy_path.exists() {
+                fs::read(&copy_path).ok()
+            } else {
+                None
+            };
+
+            // Render template
+            match dot.install(
+                &self.vars,
+                self.get_auto_ignored_files(key),
+                self.profile_enabled.as_slice(),
+            ) {
+                Err(err) => {
+                    tracing::error!(dot = %key, error = %err, "Failed to render dot");
+                    continue;
+                }
+                Ok(link_result) => {
+                    // Check if we overwrote local modifications
+                    if let Some(ref old_content) = pre_render_content {
+                        if let Ok(new_content) = fs::read(&copy_path) {
+                            if old_content != &new_content && strategy != ConflictStrategy::DotfileWins {
+                                // Content changed - user had local modifications
+                                let old_str = String::from_utf8_lossy(old_content).to_string();
+                                let new_str = String::from_utf8_lossy(&new_content).to_string();
+
+                                // Create a conflict-like prompt
+                                // Swap: system_content is what user has (will be shown as -)
+                                //       dotfile_content is new render (will be shown as +)
+                                let local_mod_conflict = Conflict {
+                                    dot_name: key.clone(),
+                                    target_path: target.clone(),
+                                    source_path: source.clone(),
+                                    rendered_path: copy_path.clone(),
+                                    dotfile_content: old_str.clone(),  // User's current (shown as -)
+                                    system_content: new_str.clone(),   // New render (shown as +)
+                                };
+
+                                let resolution = conflict_ctx.resolve(&local_mod_conflict)?;
+
+                                // Record the conflict resolution as an action
+                                let audit_resolution = match &resolution {
+                                    ConflictResolution::UseDotfile
+                                    | ConflictResolution::UseDotfileForAll => {
+                                        crate::audit::ConflictResolution::UseDotfile
+                                    }
+                                    ConflictResolution::UseSystem
+                                    | ConflictResolution::UseSystemForAll => {
+                                        crate::audit::ConflictResolution::UseSystem
+                                    }
+                                    ConflictResolution::Skip | ConflictResolution::SkipAll => {
+                                        crate::audit::ConflictResolution::KeepSystem
+                                    }
+                                };
+
+                                let conflict_action = crate::audit::Action::new(
+                                    AuditActionType::ConflictResolved {
+                                        target: target.clone(),
+                                        resolution: audit_resolution,
+                                        dotfile_hash: crate::audit::content_hash(&new_content),
+                                        system_hash: crate::audit::content_hash(old_content),
+                                    },
+                                    Some(key.clone()),
+                                );
+                                session.add_action(conflict_action);
+
+                                match resolution {
+                                    ConflictResolution::UseSystem
+                                    | ConflictResolution::UseSystemForAll => {
+                                        // Restore the user's modifications
+                                        fs::write(&copy_path, old_content)?;
+                                        tracing::info!(dot = %key, "Kept local modifications");
+                                        continue; // Skip further processing for this dot
+                                    }
+                                    ConflictResolution::Skip | ConflictResolution::SkipAll => {
+                                        // Restore and skip
+                                        fs::write(&copy_path, old_content)?;
+                                        continue;
+                                    }
+                                    _ => {
+                                        // UseDotfile - keep the new rendered content
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // Determine action type and record
+                    let (action_type, should_symlink) = match link_result {
+                        LinkResult::Created => {
+                            let content = fs::read(&copy_path).unwrap_or_default();
+                            let hash = crate::audit::content_hash(&content);
+
+                            // Save content for revert
+                            let action = crate::audit::Action::new(
+                                AuditActionType::FileCreate {
+                                    target: target.clone(),
+                                    source: source.clone(),
+                                    content_hash: hash.clone(),
+                                },
+                                Some(key.clone()),
+                            );
+                            let _ = storage.save_after_content(&action.id, &content);
+
+                            (Some(action), true)
+                        }
+                        LinkResult::Updated => {
+                            let before = fs::read(&target).ok();
+                            let after = fs::read(&copy_path).unwrap_or_default();
+                            let before_hash = before
+                                .as_ref()
+                                .map(|b| crate::audit::content_hash(b))
+                                .unwrap_or_default();
+                            let after_hash = crate::audit::content_hash(&after);
+
+                            let action = crate::audit::Action::new(
+                                AuditActionType::FileUpdate {
+                                    target: target.clone(),
+                                    source: source.clone(),
+                                    before_hash,
+                                    after_hash,
+                                },
+                                Some(key.clone()),
+                            );
+
+                            if let Some(ref b) = before {
+                                let _ = storage.save_before_content(&action.id, b);
+                            }
+                            let _ = storage.save_after_content(&action.id, &after);
+
+                            (Some(action), true)
+                        }
+                        LinkResult::Unchanged => (None, true),
+                        LinkResult::Ignored => (None, false),
+                    };
+
+                    // Add to session
+                    if let Some(action) = action_type {
+                        session.add_action(action);
+                    }
+
+                    // Check for conflicts before symlinking
+                    let should_symlink = if should_symlink {
+                        match Conflict::detect(key, &copy_path, &target, &source) {
+                            Ok(Some(conflict)) => {
+                                let resolution = conflict_ctx.resolve(&conflict)?;
+
+                                // Record the conflict resolution
+                                let audit_resolution = match &resolution {
+                                    ConflictResolution::UseDotfile
+                                    | ConflictResolution::UseDotfileForAll => {
+                                        crate::audit::ConflictResolution::UseDotfile
+                                    }
+                                    ConflictResolution::UseSystem
+                                    | ConflictResolution::UseSystemForAll => {
+                                        crate::audit::ConflictResolution::UseSystem
+                                    }
+                                    ConflictResolution::Skip | ConflictResolution::SkipAll => {
+                                        crate::audit::ConflictResolution::KeepSystem
+                                    }
+                                };
+
+                                let dotfile_hash = fs::read(&copy_path)
+                                    .map(|c| crate::audit::content_hash(&c))
+                                    .unwrap_or_default();
+                                let system_hash = fs::read(&target)
+                                    .map(|c| crate::audit::content_hash(&c))
+                                    .unwrap_or_default();
+
+                                let conflict_action = crate::audit::Action::new(
+                                    AuditActionType::ConflictResolved {
+                                        target: target.clone(),
+                                        resolution: audit_resolution,
+                                        dotfile_hash,
+                                        system_hash,
+                                    },
+                                    Some(key.clone()),
+                                );
+                                session.add_action(conflict_action);
+
+                                match resolution {
+                                    ConflictResolution::UseDotfile
+                                    | ConflictResolution::UseDotfileForAll => {
+                                        // Backup and proceed with symlink
+                                        crate::paths::backup_and_unlink(&target)?;
+                                        true
+                                    }
+                                    ConflictResolution::UseSystem
+                                    | ConflictResolution::UseSystemForAll => {
+                                        // Copy system content back to dotfile source
+                                        conflict.apply_use_system()?;
+                                        // Re-render the dot with updated source
+                                        let _ = dot.install(
+                                            &self.vars,
+                                            self.get_auto_ignored_files(key),
+                                            self.profile_enabled.as_slice(),
+                                        );
+                                        // Now symlink (target content now matches)
+                                        crate::paths::backup_and_unlink(&target)?;
+                                        true
+                                    }
+                                    ConflictResolution::Skip | ConflictResolution::SkipAll => {
+                                        // Don't symlink, leave system file as-is
+                                        false
+                                    }
+                                }
+                            }
+                            Ok(None) => true,  // No conflict
+                            Err(e) => {
+                                tracing::warn!(dot = %key, error = %e, "Error detecting conflict");
+                                true
+                            }
+                        }
+                    } else {
+                        false
+                    };
+
+                    // Create symlink if needed
+                    if should_symlink {
+                        if let Err(e) = dot.symlink() {
+                            tracing::error!(dot = %key, error = %e, "Failed to create symlink");
+                        }
+                    }
+                }
+            }
+        }
+
+        // Print conflict summary
+        conflict_ctx.print_summary();
+
+        // Run posthooks
+        for hook in &self.posthooks {
+            match hook.run_capture() {
+                Ok(result) => {
+                    let action = crate::audit::Action::new(
+                        AuditActionType::HookExecuted {
+                            command: result.command.clone(),
+                            hook_type: crate::audit::HookType::PostInstall,
+                            exit_code: result.exit_code,
+                        },
+                        None,
+                    );
+
+                    // Save hook output as logs
+                    let log_content = format_hook_logs(&result);
+                    if !log_content.is_empty() {
+                        let _ = storage.save_logs(&action.id, &log_content);
+                    }
+
+                    session.add_action(action);
+
+                    if !result.success() {
+                        tracing::error!(
+                            command = %result.command,
+                            exit_code = result.exit_code,
+                            "Posthook failed"
+                        );
+                    }
+                }
+                Err(err) => {
+                    tracing::error!(error = %err, "Failed to run posthook");
+                }
+            }
+        }
+
+        // Clean up orphaned symlinks
+        let absolute_path_to_dot = self.dotfiles_absolute_path()?;
+        let previous_state = BombadilState::read(absolute_path_to_dot.clone());
+        let new_state = BombadilState::from(self);
+
+        if let Ok(previous_state) = previous_state {
+            let diff = previous_state.symlinks.difference(&new_state.symlinks);
+            for orphan in diff {
+                if orphan.exists() {
+                    if let Ok(canonicalized) = orphan.canonicalize() {
+                        if let Ok(()) = unlink(orphan) {
+                            if canonicalized.is_dir() {
+                                let _ = fs::remove_dir_all(&canonicalized);
+                            } else {
+                                let _ = fs::remove_file(&canonicalized);
+                            }
+
+                            session.add_action(crate::audit::Action::new(
+                                AuditActionType::SymlinkRemove {
+                                    target: orphan.clone(),
+                                    was_pointing_to: canonicalized,
+                                },
+                                None,
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+
+        // Save new state
+        new_state.write()?;
+
+        // Complete and save session
+        session.complete();
+        if !session.is_empty() {
+            storage.save_session(&session)?;
+        }
+
+        Ok(session)
+    }
+
+    /// Execute a planned installation with options.
+    ///
+    /// When `review` is true, prompts the user to approve each change (creates and updates).
+    pub fn execute_install_with_options(
+        &self,
+        _plan: ActionPlan,
+        profiles: Vec<String>,
+        strategy: ConflictStrategy,
+        review: bool,
+    ) -> Result<Session> {
+        let dotfiles_path = self.dotfiles_absolute_path()?;
+        let storage = AuditStorage::new(&dotfiles_path);
+        storage.init()?;
+
+        let mut session = Session::new("link", profiles.clone());
+        let mut conflict_ctx = ConflictContext::new(strategy);
+        let mut review_ctx = ReviewContext::new(review);
+
+        // Run prehooks
+        for hook in &self.prehooks {
+            match hook.run_capture() {
+                Ok(result) => {
+                    let action = crate::audit::Action::new(
+                        AuditActionType::HookExecuted {
+                            command: result.command.clone(),
+                            hook_type: crate::audit::HookType::PreInstall,
+                            exit_code: result.exit_code,
+                        },
+                        None,
+                    );
+
+                    // Save hook output as logs
+                    let log_content = format_hook_logs(&result);
+                    if !log_content.is_empty() {
+                        let _ = storage.save_logs(&action.id, &log_content);
+                    }
+
+                    session.add_action(action);
+
+                    if !result.success() {
+                        tracing::error!(
+                            command = %result.command,
+                            exit_code = result.exit_code,
+                            "Prehook failed"
+                        );
+                    }
+                }
+                Err(err) => {
+                    tracing::error!(error = %err, "Failed to run prehook");
+                }
+            }
+        }
+
+        let dot_copy_dir = self.path.join(".dots");
+        fs::create_dir_all(&dot_copy_dir)?;
+
+        // Execute each dot installation
+        for (key, dot) in self.dots.iter() {
+            // Use build_copy_path (doesn't require file to exist) for pre-check
+            let copy_path = dot.build_copy_path();
+            let target = match dot.target() {
+                Ok(t) => t,
+                Err(e) => {
+                    tracing::warn!(dot = %key, error = %e, "Skipping dot due to target error");
+                    continue;
+                }
+            };
+            let source = match dot.source() {
+                Ok(s) => s,
+                Err(e) => {
+                    tracing::warn!(dot = %key, error = %e, "Skipping dot due to source error");
+                    continue;
+                }
+            };
+
+            // Check for local modifications BEFORE rendering
+            let pre_render_content = if copy_path.exists() {
+                fs::read(&copy_path).ok()
+            } else {
+                None
+            };
+
+            // Render template
+            match dot.install(
+                &self.vars,
+                self.get_auto_ignored_files(key),
+                self.profile_enabled.as_slice(),
+            ) {
+                Err(err) => {
+                    tracing::error!(dot = %key, error = %err, "Failed to render dot");
+                    continue;
+                }
+                Ok(link_result) => {
+                    // Check if we overwrote local modifications (only when not in review mode,
+                    // as review mode will handle all changes anyway)
+                    if !review && strategy != ConflictStrategy::DotfileWins {
+                        if let Some(ref old_content) = pre_render_content {
+                            if let Ok(new_content) = fs::read(&copy_path) {
+                                if old_content != &new_content {
+                                    // Content changed - user had local modifications
+                                    let old_str = String::from_utf8_lossy(old_content).to_string();
+                                    let new_str = String::from_utf8_lossy(&new_content).to_string();
+
+                                    let local_mod_conflict = Conflict {
+                                        dot_name: key.clone(),
+                                        target_path: target.clone(),
+                                        source_path: source.clone(),
+                                        rendered_path: copy_path.clone(),
+                                        dotfile_content: old_str.clone(),
+                                        system_content: new_str.clone(),
+                                    };
+
+                                    let resolution = conflict_ctx.resolve(&local_mod_conflict)?;
+
+                                    // Record the conflict resolution as an action
+                                    let audit_resolution = match &resolution {
+                                        ConflictResolution::UseDotfile
+                                        | ConflictResolution::UseDotfileForAll => {
+                                            crate::audit::ConflictResolution::UseDotfile
+                                        }
+                                        ConflictResolution::UseSystem
+                                        | ConflictResolution::UseSystemForAll => {
+                                            crate::audit::ConflictResolution::UseSystem
+                                        }
+                                        ConflictResolution::Skip | ConflictResolution::SkipAll => {
+                                            crate::audit::ConflictResolution::KeepSystem
+                                        }
+                                    };
+
+                                    let conflict_action = crate::audit::Action::new(
+                                        AuditActionType::ConflictResolved {
+                                            target: target.clone(),
+                                            resolution: audit_resolution,
+                                            dotfile_hash: crate::audit::content_hash(&new_content),
+                                            system_hash: crate::audit::content_hash(old_content),
+                                        },
+                                        Some(key.clone()),
+                                    );
+                                    session.add_action(conflict_action);
+
+                                    match resolution {
+                                        ConflictResolution::UseSystem
+                                        | ConflictResolution::UseSystemForAll => {
+                                            fs::write(&copy_path, old_content)?;
+                                            tracing::info!(dot = %key, "Kept local modifications");
+                                            continue;
+                                        }
+                                        ConflictResolution::Skip | ConflictResolution::SkipAll => {
+                                            fs::write(&copy_path, old_content)?;
+                                            continue;
+                                        }
+                                        _ => {
+                                            // UseDotfile - keep the new rendered content
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // If in review mode, check if user wants to apply this change
+                    let should_proceed = if review {
+                        let new_content = fs::read_to_string(&copy_path).unwrap_or_default();
+                        let target_exists = target.exists() && !target.is_symlink();
+                        let target_is_our_symlink = if target.is_symlink() {
+                            target
+                                .canonicalize()
+                                .map(|p| p.starts_with(&dot_copy_dir))
+                                .unwrap_or(false)
+                        } else {
+                            false
+                        };
+
+                        // Only prompt for actual changes (creates or updates)
+                        match link_result {
+                            LinkResult::Created | LinkResult::Updated => {
+                                let review_change = if target_exists {
+                                    // It's an update to an existing file
+                                    let old_content =
+                                        fs::read_to_string(&target).unwrap_or_default();
+                                    Some(ReviewChange::update(
+                                        Some(key.clone()),
+                                        target.clone(),
+                                        old_content,
+                                        new_content,
+                                    ))
+                                } else if target_is_our_symlink {
+                                    // Already our symlink, but content changed
+                                    if let Some(ref old) = pre_render_content {
+                                        let old_str = String::from_utf8_lossy(old).to_string();
+                                        Some(ReviewChange::update(
+                                            Some(key.clone()),
+                                            target.clone(),
+                                            old_str,
+                                            new_content,
+                                        ))
+                                    } else {
+                                        // No old content to compare, skip review
+                                        None
+                                    }
+                                } else {
+                                    // It's a new file
+                                    Some(ReviewChange::create(
+                                        Some(key.clone()),
+                                        target.clone(),
+                                        new_content,
+                                    ))
+                                };
+
+                                match review_change {
+                                    Some(change) => review_ctx.review(&change)?,
+                                    None => true, // No change to review, proceed
+                                }
+                            }
+                            _ => true, // Unchanged or Ignored - no prompt needed
+                        }
+                    } else {
+                        true
+                    };
+
+                    if !should_proceed {
+                        // User skipped this change in review mode
+                        // Restore old content if we had any
+                        if let Some(ref old_content) = pre_render_content {
+                            fs::write(&copy_path, old_content)?;
+                        }
+                        continue;
+                    }
+
+                    // Determine action type and record
+                    let (action_type, should_symlink) = match link_result {
+                        LinkResult::Created => {
+                            let content = fs::read(&copy_path).unwrap_or_default();
+                            let hash = crate::audit::content_hash(&content);
+
+                            let action = crate::audit::Action::new(
+                                AuditActionType::FileCreate {
+                                    target: target.clone(),
+                                    source: source.clone(),
+                                    content_hash: hash.clone(),
+                                },
+                                Some(key.clone()),
+                            );
+                            let _ = storage.save_after_content(&action.id, &content);
+
+                            (Some(action), true)
+                        }
+                        LinkResult::Updated => {
+                            let before = fs::read(&target).ok();
+                            let after = fs::read(&copy_path).unwrap_or_default();
+                            let before_hash = before
+                                .as_ref()
+                                .map(|b| crate::audit::content_hash(b))
+                                .unwrap_or_default();
+                            let after_hash = crate::audit::content_hash(&after);
+
+                            let action = crate::audit::Action::new(
+                                AuditActionType::FileUpdate {
+                                    target: target.clone(),
+                                    source: source.clone(),
+                                    before_hash,
+                                    after_hash,
+                                },
+                                Some(key.clone()),
+                            );
+
+                            if let Some(ref b) = before {
+                                let _ = storage.save_before_content(&action.id, b);
+                            }
+                            let _ = storage.save_after_content(&action.id, &after);
+
+                            (Some(action), true)
+                        }
+                        LinkResult::Unchanged => (None, true),
+                        LinkResult::Ignored => (None, false),
+                    };
+
+                    // Add to session
+                    if let Some(action) = action_type {
+                        session.add_action(action);
+                    }
+
+                    // Check for conflicts before symlinking (unless in review mode, where we already asked)
+                    let should_symlink = if should_symlink && !review {
+                        match Conflict::detect(key, &copy_path, &target, &source) {
+                            Ok(Some(conflict)) => {
+                                let resolution = conflict_ctx.resolve(&conflict)?;
+
+                                // Record the conflict resolution
+                                let audit_resolution = match &resolution {
+                                    ConflictResolution::UseDotfile
+                                    | ConflictResolution::UseDotfileForAll => {
+                                        crate::audit::ConflictResolution::UseDotfile
+                                    }
+                                    ConflictResolution::UseSystem
+                                    | ConflictResolution::UseSystemForAll => {
+                                        crate::audit::ConflictResolution::UseSystem
+                                    }
+                                    ConflictResolution::Skip | ConflictResolution::SkipAll => {
+                                        crate::audit::ConflictResolution::KeepSystem
+                                    }
+                                };
+
+                                let dotfile_hash = fs::read(&copy_path)
+                                    .map(|c| crate::audit::content_hash(&c))
+                                    .unwrap_or_default();
+                                let system_hash = fs::read(&target)
+                                    .map(|c| crate::audit::content_hash(&c))
+                                    .unwrap_or_default();
+
+                                let conflict_action = crate::audit::Action::new(
+                                    AuditActionType::ConflictResolved {
+                                        target: target.clone(),
+                                        resolution: audit_resolution,
+                                        dotfile_hash,
+                                        system_hash,
+                                    },
+                                    Some(key.clone()),
+                                );
+                                session.add_action(conflict_action);
+
+                                match resolution {
+                                    ConflictResolution::UseDotfile
+                                    | ConflictResolution::UseDotfileForAll => {
+                                        crate::paths::backup_and_unlink(&target)?;
+                                        true
+                                    }
+                                    ConflictResolution::UseSystem
+                                    | ConflictResolution::UseSystemForAll => {
+                                        conflict.apply_use_system()?;
+                                        let _ = dot.install(
+                                            &self.vars,
+                                            self.get_auto_ignored_files(key),
+                                            self.profile_enabled.as_slice(),
+                                        );
+                                        crate::paths::backup_and_unlink(&target)?;
+                                        true
+                                    }
+                                    ConflictResolution::Skip | ConflictResolution::SkipAll => false,
+                                }
+                            }
+                            Ok(None) => true,
+                            Err(e) => {
+                                tracing::warn!(dot = %key, error = %e, "Error detecting conflict");
+                                true
+                            }
+                        }
+                    } else if should_symlink && review {
+                        // In review mode, we already confirmed - backup if needed
+                        if target.exists() && !target.is_symlink() {
+                            crate::paths::backup_and_unlink(&target)?;
+                        } else if target.is_symlink() {
+                            // Check if it points to our .dots/ directory
+                            if let Ok(link_target) = target.canonicalize() {
+                                if !link_target.starts_with(&dot_copy_dir) {
+                                    crate::paths::backup_and_unlink(&target)?;
+                                }
+                            }
+                        }
+                        true
+                    } else {
+                        false
+                    };
+
+                    // Create symlink if needed
+                    if should_symlink {
+                        if let Err(e) = dot.symlink() {
+                            tracing::error!(dot = %key, error = %e, "Failed to create symlink");
+                        }
+                    }
+                }
+            }
+        }
+
+        // Print summaries
+        conflict_ctx.print_summary();
+        review_ctx.print_summary();
+
+        // Run posthooks
+        for hook in &self.posthooks {
+            match hook.run_capture() {
+                Ok(result) => {
+                    let action = crate::audit::Action::new(
+                        AuditActionType::HookExecuted {
+                            command: result.command.clone(),
+                            hook_type: crate::audit::HookType::PostInstall,
+                            exit_code: result.exit_code,
+                        },
+                        None,
+                    );
+
+                    let log_content = format_hook_logs(&result);
+                    if !log_content.is_empty() {
+                        let _ = storage.save_logs(&action.id, &log_content);
+                    }
+
+                    session.add_action(action);
+
+                    if !result.success() {
+                        tracing::error!(
+                            command = %result.command,
+                            exit_code = result.exit_code,
+                            "Posthook failed"
+                        );
+                    }
+                }
+                Err(err) => {
+                    tracing::error!(error = %err, "Failed to run posthook");
+                }
+            }
+        }
+
+        // Clean up orphaned symlinks
+        let absolute_path_to_dot = self.dotfiles_absolute_path()?;
+        let previous_state = BombadilState::read(absolute_path_to_dot.clone());
+        let new_state = BombadilState::from(self);
+
+        if let Ok(previous_state) = previous_state {
+            let diff = previous_state.symlinks.difference(&new_state.symlinks);
+            for orphan in diff {
+                if orphan.exists() {
+                    if let Ok(canonicalized) = orphan.canonicalize() {
+                        // In review mode, prompt for orphan removal
+                        let should_remove = if review {
+                            let change = ReviewChange::delete(
+                                None,
+                                orphan.clone(),
+                                fs::read_to_string(&canonicalized).unwrap_or_default(),
+                            );
+                            review_ctx.review(&change)?
+                        } else {
+                            true
+                        };
+
+                        if should_remove {
+                            if let Ok(()) = unlink(orphan) {
+                                if canonicalized.is_dir() {
+                                    let _ = fs::remove_dir_all(&canonicalized);
+                                } else {
+                                    let _ = fs::remove_file(&canonicalized);
+                                }
+
+                                session.add_action(crate::audit::Action::new(
+                                    AuditActionType::SymlinkRemove {
+                                        target: orphan.clone(),
+                                        was_pointing_to: canonicalized,
+                                    },
+                                    None,
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Save new state
+        new_state.write()?;
+
+        // Complete and save session
+        session.complete();
+        if !session.is_empty() {
+            storage.save_session(&session)?;
+        }
+
+        Ok(session)
+    }
+
+    /// Helper to compute backup path for a target file
+    fn backup_path(&self, target: &Path) -> PathBuf {
+        let target_as_non_absolute = if target.is_absolute() {
+            target.strip_prefix("/").unwrap_or(target)
+        } else {
+            target
+        };
+        self.path.join(".backups").join(target_as_non_absolute)
+    }
+
+    /// Helper to hash a file if it exists
+    fn hash_file_if_exists(&self, path: &Path) -> String {
+        if path.exists() {
+            if let Ok(content) = fs::read(path) {
+                return crate::audit::content_hash(&content);
+            }
+        }
+        String::new()
     }
 
     /// Unlink dotfiles according to previous state
@@ -382,7 +1727,7 @@ impl Bombadil {
 
         runtime.pathset([dotfiles_path]);
 
-        runtime.on_action(move |action: Action| {
+        runtime.on_action(move |action: WatchAction| {
             let mut b = Bombadil::from_settings(Mode::Gpg).expect("Failed to get settings");
             b.enable_profiles(profiles.iter().map(String::as_str).collect())
                 .expect("Failed to enable profiles");
@@ -738,6 +2083,32 @@ pub enum MetadataType {
     Profiles,
     Vars,
     Secrets,
+}
+
+/// Format hook stdout/stderr for storage as logs.
+fn format_hook_logs(result: &hook::HookResult) -> String {
+    let mut log = String::new();
+
+    if !result.stdout.is_empty() {
+        log.push_str("=== stdout ===\n");
+        for line in &result.stdout {
+            log.push_str(line);
+            log.push('\n');
+        }
+    }
+
+    if !result.stderr.is_empty() {
+        if !log.is_empty() {
+            log.push('\n');
+        }
+        log.push_str("=== stderr ===\n");
+        for line in &result.stderr {
+            log.push_str(line);
+            log.push('\n');
+        }
+    }
+
+    log
 }
 
 #[cfg(test)]
