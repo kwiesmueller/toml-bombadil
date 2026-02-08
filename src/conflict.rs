@@ -1,4 +1,3 @@
-use crate::settings::dotfile_dir;
 use anyhow::{anyhow, Result};
 use colored::*;
 use similar::{ChangeTag, TextDiff};
@@ -68,12 +67,33 @@ pub struct Conflict {
 }
 
 impl Conflict {
-    /// Detect if there's a conflict between the rendered dotfile and the target
+    /// Detect if there's a conflict between the rendered dotfile and the target.
+    ///
+    /// Backward-compatible 4-argument version that uses the global `dotfile_dir()`
+    /// to locate the `.dots` directory. Prefer `detect_in()` for new code that has
+    /// an explicit dotfiles directory available.
     pub fn detect(
         dot_name: &str,
         rendered_path: &Path,
         target_path: &Path,
         source_path: &Path,
+    ) -> Result<Option<Self>> {
+        let dotfiles_dir = crate::settings::dotfile_dir();
+        Self::detect_in(dot_name, rendered_path, target_path, source_path, &dotfiles_dir)
+    }
+
+    /// Detect if there's a conflict between the rendered dotfile and the target.
+    ///
+    /// `dotfiles_dir` is the absolute path to the dotfiles repository root.
+    /// It is used to locate the `.dots` directory for symlink comparison.
+    /// This variant avoids the global `dotfile_dir()` call, making it suitable
+    /// for use with explicitly-loaded v4 configuration.
+    pub fn detect_in(
+        dot_name: &str,
+        rendered_path: &Path,
+        target_path: &Path,
+        source_path: &Path,
+        dotfiles_dir: &Path,
     ) -> Result<Option<Self>> {
         // If target doesn't exist, no conflict
         if !target_path.exists() {
@@ -83,7 +103,7 @@ impl Conflict {
         // If target is already a symlink pointing to our .dots/, no conflict
         if target_path.is_symlink() {
             if let Ok(link_target) = target_path.canonicalize() {
-                let dots_dir = dotfile_dir().join(".dots");
+                let dots_dir = dotfiles_dir.join(".dots");
                 if link_target.starts_with(&dots_dir) {
                     return Ok(None);
                 }
@@ -298,6 +318,270 @@ pub struct ConflictContext {
     pub resolved_count: usize,
     /// Count of conflicts skipped
     pub skipped_count: usize,
+}
+
+/// Resolution for a reviewed change
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ReviewResolution {
+    /// Apply this change
+    Apply,
+    /// Skip this change
+    Skip,
+    /// Edit the file before applying
+    Edit,
+    /// Apply all remaining changes without prompting
+    ApplyAll,
+    /// Skip all remaining changes
+    SkipAll,
+}
+
+/// Represents a change to be reviewed (create, update, or delete)
+#[derive(Debug)]
+pub struct ReviewChange {
+    /// Name of the dot entry (if applicable)
+    pub dot_name: Option<String>,
+    /// Path to the target file
+    pub target_path: PathBuf,
+    /// Type of change
+    pub change_type: ReviewChangeType,
+    /// Content before (for updates/deletes)
+    pub before_content: Option<String>,
+    /// Content after (for creates/updates)
+    pub after_content: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReviewChangeType {
+    Create,
+    Update,
+    Delete,
+}
+
+impl ReviewChange {
+    /// Create a new ReviewChange for a file creation
+    pub fn create(dot_name: Option<String>, target_path: PathBuf, content: String) -> Self {
+        Self {
+            dot_name,
+            target_path,
+            change_type: ReviewChangeType::Create,
+            before_content: None,
+            after_content: Some(content),
+        }
+    }
+
+    /// Create a new ReviewChange for a file update
+    pub fn update(dot_name: Option<String>, target_path: PathBuf, before: String, after: String) -> Self {
+        Self {
+            dot_name,
+            target_path,
+            change_type: ReviewChangeType::Update,
+            before_content: Some(before),
+            after_content: Some(after),
+        }
+    }
+
+    /// Create a new ReviewChange for a file deletion
+    pub fn delete(dot_name: Option<String>, target_path: PathBuf, content: String) -> Self {
+        Self {
+            dot_name,
+            target_path,
+            change_type: ReviewChangeType::Delete,
+            before_content: Some(content),
+            after_content: None,
+        }
+    }
+
+    /// Generate a diff for this change
+    pub fn generate_diff(&self) -> String {
+        let before = self.before_content.as_deref().unwrap_or("");
+        let after = self.after_content.as_deref().unwrap_or("");
+
+        let diff = TextDiff::from_lines(before, after);
+        let mut output = String::new();
+
+        for (idx, group) in diff.grouped_ops(3).iter().enumerate() {
+            if idx > 0 {
+                output.push_str("...\n");
+            }
+            for op in group {
+                for change in diff.iter_changes(op) {
+                    let (sign, line) = match change.tag() {
+                        ChangeTag::Delete => ("-".red(), change.value().red()),
+                        ChangeTag::Insert => ("+".green(), change.value().green()),
+                        ChangeTag::Equal => (" ".normal(), change.value().normal()),
+                    };
+                    output.push_str(&format!("{}{}", sign, line));
+                    if change.missing_newline() {
+                        output.push('\n');
+                    }
+                }
+            }
+        }
+
+        output
+    }
+
+    /// Show header for this change
+    pub fn print_header(&self) {
+        println!();
+        println!("{}", "═".repeat(60).yellow());
+        let change_label = match self.change_type {
+            ReviewChangeType::Create => "Create".green(),
+            ReviewChangeType::Update => "Update".blue(),
+            ReviewChangeType::Delete => "Delete".red(),
+        };
+        print!("{} {}", change_label.bold(), self.target_path.display());
+        if let Some(ref dot_name) = self.dot_name {
+            print!(" ({})", dot_name.cyan());
+        }
+        println!();
+        println!("{}", "─".repeat(60).yellow());
+    }
+
+    /// Prompt user to review and approve this change
+    pub fn prompt_user(&self) -> Result<ReviewResolution> {
+        self.print_header();
+
+        // Show diff
+        let diff = self.generate_diff();
+        if !diff.is_empty() {
+            println!("{}", diff);
+        } else if let Some(ref content) = self.after_content {
+            // For creates with no before content, just show the new content
+            println!("{}", content.green());
+        }
+
+        println!("{}", "─".repeat(60).yellow());
+        println!();
+        println!("Choose action:");
+        println!("  {} Apply this change", "[y]".cyan());
+        println!("  {} Skip this change", "[n]".cyan());
+        println!("  {} Edit the file", "[e]".cyan());
+        println!();
+        println!(
+            "  {} Apply ALL remaining changes",
+            "[Y]".cyan().bold()
+        );
+        println!("  {} Skip ALL remaining changes", "[N]".cyan().bold());
+        println!();
+        print!("{} ", ">".green().bold());
+        io::stdout().flush()?;
+
+        let mut input = String::new();
+        io::stdin().lock().read_line(&mut input)?;
+
+        match input.trim() {
+            "y" | "" => Ok(ReviewResolution::Apply),
+            "n" => Ok(ReviewResolution::Skip),
+            "e" => {
+                self.open_editor()?;
+                self.prompt_user()
+            }
+            "Y" => Ok(ReviewResolution::ApplyAll),
+            "N" => Ok(ReviewResolution::SkipAll),
+            _ => {
+                println!("{}", "Invalid choice, please try again.".red());
+                self.prompt_user()
+            }
+        }
+    }
+
+    /// Open editor for this file
+    fn open_editor(&self) -> Result<()> {
+        let editor = std::env::var("EDITOR").unwrap_or_else(|_| "vim".to_string());
+        println!("{}", format!("Opening editor: {} ...", editor).yellow());
+
+        // For creates/updates, edit the after content file (rendered path in .dots/)
+        // The after_content is already at a path we need to determine
+        // For now, we'll just note this is a limitation
+        println!(
+            "{}",
+            "Note: Manual editing should be done on the source file in your dotfiles repo.".yellow()
+        );
+
+        Ok(())
+    }
+}
+
+/// Context for tracking review state across multiple changes
+#[derive(Default)]
+pub struct ReviewContext {
+    /// Whether review mode is active
+    pub active: bool,
+    /// Sticky resolution (from "for all" choices)
+    pub sticky_resolution: Option<ReviewResolution>,
+    /// Count of changes applied
+    pub applied_count: usize,
+    /// Count of changes skipped
+    pub skipped_count: usize,
+}
+
+impl ReviewContext {
+    pub fn new(active: bool) -> Self {
+        Self {
+            active,
+            sticky_resolution: None,
+            applied_count: 0,
+            skipped_count: 0,
+        }
+    }
+
+    /// Review a change, returning whether it should be applied
+    pub fn review(&mut self, change: &ReviewChange) -> Result<bool> {
+        if !self.active {
+            return Ok(true);
+        }
+
+        // Check for sticky resolution first
+        if let Some(ref sticky) = self.sticky_resolution {
+            return Ok(match sticky {
+                ReviewResolution::ApplyAll => {
+                    self.applied_count += 1;
+                    true
+                }
+                ReviewResolution::SkipAll => {
+                    self.skipped_count += 1;
+                    false
+                }
+                _ => true,
+            });
+        }
+
+        let resolution = change.prompt_user()?;
+
+        // Update sticky if "for all" was chosen
+        match &resolution {
+            ReviewResolution::ApplyAll | ReviewResolution::SkipAll => {
+                self.sticky_resolution = Some(resolution.clone());
+            }
+            _ => {}
+        }
+
+        // Update counts and return decision
+        match resolution {
+            ReviewResolution::Apply | ReviewResolution::ApplyAll | ReviewResolution::Edit => {
+                self.applied_count += 1;
+                Ok(true)
+            }
+            ReviewResolution::Skip | ReviewResolution::SkipAll => {
+                self.skipped_count += 1;
+                Ok(false)
+            }
+        }
+    }
+
+    /// Print summary at the end
+    pub fn print_summary(&self) {
+        if self.active && (self.applied_count > 0 || self.skipped_count > 0) {
+            println!();
+            println!("{}", "─".repeat(40));
+            println!(
+                "Review: {} applied, {} skipped",
+                self.applied_count.to_string().green(),
+                self.skipped_count.to_string().yellow()
+            );
+        }
+    }
 }
 
 impl ConflictContext {
