@@ -156,11 +156,12 @@ impl BombadilState {
         let state_path = path.join(".dots").join(STATE_FILE);
 
         if state_path.exists() {
-            ::config::Config::builder()
-                .add_source(::config::File::from(state_path))
-                .build()?
-                .try_deserialize::<BombadilState>()
-                .map_err(|err| anyhow!("{} : {}", "Previous state format error".red(), err))
+            let content = fs::read_to_string(&state_path)
+                .with_context(|| format!("reading state file {}", state_path.display()))?;
+            let mut state: BombadilState = toml::from_str(&content)
+                .map_err(|err| anyhow!("{} : {}", "Previous state format error".red(), err))?;
+            state.path = state_path;
+            Ok(state)
         } else {
             Err(anyhow!(
                 "Unable to find Previous state file {}",
@@ -198,11 +199,23 @@ impl From<&Bombadil> for BombadilState {
             .unwrap()
             .join(".dots")
             .join(STATE_FILE);
-        let symlinks = current
+
+        let mut symlinks: HashSet<PathBuf> = current
             .dots
             .iter()
-            .map(|dot| dot.1.target().unwrap())
+            .filter_map(|dot| dot.1.target().ok())
             .collect();
+
+        // Also collect targets from v4 dots
+        for dot in current.v4_dots.values() {
+            let target = match dot {
+                config::Dot::Simple { target, .. } => Some(config::resolve_path(target)),
+                config::Dot::Full(full) => full.target.as_ref().map(|t| config::resolve_path(t)),
+            };
+            if let Some(t) = target {
+                symlinks.insert(t);
+            }
+        }
 
         Self { path, symlinks }
     }
