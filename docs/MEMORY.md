@@ -2,20 +2,16 @@
 
 ## Implementation Status (as of 2026-03-21)
 
-**Phase 1 complete** — committed on `main` branch.
-- Commit `f30f90f`: consolidation baseline (all prior v4 work committed)
-- Commit `9af0802`: Phase 1 — new config schema, dots.toml discovery, SyncEngine
-- Commit `cc6ae7e`: MEMORY.md added to docs/
+**Phase 1 complete** — commit `9af0802`
+**Phase 2 complete** — commit `cdf5013` (audit recording + hook execution in execute_plan)
+**Phase 3 complete** — commit `cdf5013` (real PackageManager integration)
+**Feature parity + migrate command** — commit `18c8329`
 
-**Phase 2 in progress** — NOT yet committed. Working on `main`.
-- `execute_plan()` now creates AuditStorage + Session, runs hooks with `Hook::run_capture()`,
-  records `SymlinkCreate`/`FileCreate`/`Backup` actions, and saves Session at end of run.
-- Created v4 `packages/drift.rs` (DriftReport via PackageManager trait).
-- Created stubs `packages/discover.rs`, `packages/persist.rs`, `packages/install.rs`
-  to fix pre-existing compile errors (missing module files). These will be deleted in Phase 4.
+Recent commits on `main`:
+- `cdf5013`: Phase 2+3 — audit recording, hook execution, real PackageManager integration
+- `18c8329`: v4 feature parity + bombadil migrate command
 
-**Test status**: 243 lib tests + 18 e2e tests + 1 doc-test = 262 total, all passing.
-(Note: stale `target/release/bombadil` binary from Apr 2025 was deleted; e2e tests now use debug binary.)
+**Test status**: 246 lib tests + 18 e2e tests + 1 doc-test = 265 total, all passing.
 
 ## Project Structure
 - `src/config/` - v4 config types with JsonSchema (schema.rs, loader.rs, toml_loader.rs)
@@ -95,8 +91,6 @@ Key types in `src/config/schema.rs`:
 
 ## Remaining Phases
 
-- **Phase 2**: ✓ Audit recording + hook execution in execute_plan() (done, not yet committed)
-- **Phase 3**: Real PackageManager integration (replace stubs in plan_packages_for_dot)
 - **Phase 4**: Delete v3 modules (src/settings/, src/paths/, src/templating.rs, src/error.rs,
   bulk of src/lib.rs). Rename BombadilSync → Sync in CLI.
   Add `bombadil init` command with --profile flag + .active_profile writing.
@@ -118,10 +112,29 @@ Planned (Phase 4):
 - `bombadil new <path> [--target] [--name]` — scaffold new dot with boilerplate dots.toml
 - `bombadil sync` — final name for the new sync command
 
+## New Schema Types (commit 18c8329)
+
+- `PkgManagerInstall` enum in `config/schema.rs`: `Simple(String)` | `Extended { package, repo, repo_url, gpg_key }`
+  - Replaces `Option<String>` for `dnf/apt/brew/pacman` in `InstallMethods`
+  - `.package_name()` → the install name; `.repo_file()` → optional repo file path
+- `FileTargetOptions` now has `hard_copy_target: Option<String>` + `hard_copy_permissions: Option<u32>`
+- `PlannedFile` has `hard_copy_target: Option<PathBuf>` + `hard_copy_permissions: Option<u32>`
+- `PlannedPackage` has `repo_file: Option<PathBuf>`
+- `plan_packages_for_dot()` now takes `dotfiles_dir: &Path` (third arg)
+- Manager selection fixed: only picks a manager if the package explicitly configures it
+
+## migrate command
+
+- `bombadil migrate <dotfiles-dir> [--output <out-dir>] [--dry-run]`
+- Never modifies files in `<dotfiles-dir>`; writes `dots.toml` into `<out-dir>`
+- Handles: dot import files, top-level package files, hard_copy_target, extended pkg manager configs
+- Warns for: binary/git/source installs, disabled packages, repo_url/gpg_key configs
+
 ## Important Code Locations
 
 - `src/lib.rs:2600` — `v3_dot_from_v4()` bridge (to delete in Phase 4)
 - `src/lib.rs:398` — `v4_dots: HashMap<String, config::Dot>` (to delete in Phase 4)
-- `src/bin/bombadil.rs:392` — main match block (add BombadilSync arm is already there)
+- `src/bin/bombadil.rs:452` — BombadilSync arm; Migrate arm added
 - `src/sync/plan.rs:280` — `build_sync_plan()` entry point
 - `src/config/mod.rs:194` — `discover_dot_files()` entry point
+- `src/migrate/mod.rs` — migration logic (migrate(), generate_dots_toml(), etc.)
