@@ -17,6 +17,7 @@ pub use plan::{
     PlannedPackage, SkipReason, SyncItem, SyncOptions, SyncPlan,
 };
 
+
 use crate::core::Result;
 use std::path::{Path, PathBuf};
 use tracing::instrument;
@@ -59,7 +60,10 @@ impl SyncEngine {
 /// persisted as a `Session` at the end of the run.
 #[instrument(skip(plan))]
 pub fn execute_plan(plan: SyncPlan) -> Result<()> {
-    use crate::sync::plan::{DotAction, SyncItem};
+    use crate::audit::{Action, ActionType, AuditStorage, HookType, Session};
+    use crate::core::BombadilError;
+    use crate::hook::Hook;
+    use crate::sync::plan::{DotAction, HookPhase, SyncItem};
     use tracing::{info, warn};
 
     info!(
@@ -67,6 +71,14 @@ pub fn execute_plan(plan: SyncPlan) -> Result<()> {
         items = plan.items.len(),
         "starting sync"
     );
+
+    let storage = AuditStorage::new(&plan.dotfiles_dir);
+    storage.init().map_err(|e| BombadilError::Io {
+        context: format!("failed to init audit storage: {e}"),
+        source: std::io::Error::new(std::io::ErrorKind::Other, e.to_string()),
+    })?;
+
+    let mut session = Session::new("bombadil sync", vec![]);
 
     for item in &plan.items {
         match item {
@@ -78,19 +90,48 @@ pub fn execute_plan(plan: SyncPlan) -> Result<()> {
                     phase = ?hook.phase,
                     "running hook"
                 );
-                // TODO(Phase 2): execute hook, record Action::HookExecuted
+
+                let h = Hook::new(plan.dotfiles_dir.clone(), &hook.command, true);
+                let result = h.run_capture().unwrap_or_else(|e| {
+                    warn!(command = %hook.command, error = %e, "hook failed to spawn");
+                    crate::hook::HookResult {
+                        command: hook.command.clone(),
+                        exit_code: -1,
+                        stdout: vec![],
+                        stderr: vec![],
+                    }
+                });
+
+                if result.exit_code != 0 {
+                    warn!(
+                        command = %hook.command,
+                        exit_code = result.exit_code,
+                        "hook exited with non-zero status"
+                    );
+                }
+
+                let hook_type = match hook.phase {
+                    HookPhase::Pre => HookType::PreInstall,
+                    HookPhase::Post => HookType::PostInstall,
+                };
+                let action = Action::new(
+                    ActionType::HookExecuted {
+                        command: hook.command.clone(),
+                        hook_type,
+                        exit_code: result.exit_code,
+                    },
+                    hook.owner.clone(),
+                );
+                session.add_action(action);
             }
             SyncItem::Dot(dot) => {
-                match &dot.action {
-                    DotAction::Skip { reason } => {
-                        info!(
-                            name = %dot.name,
-                            root_cause = %reason.root_cause(),
-                            "⊘ skipping dot"
-                        );
-                        continue;
-                    }
-                    _ => {}
+                if let DotAction::Skip { reason } = &dot.action {
+                    info!(
+                        name = %dot.name,
+                        root_cause = %reason.root_cause(),
+                        "⊘ skipping dot"
+                    );
+                    continue;
                 }
 
                 info!(
@@ -102,34 +143,102 @@ pub fn execute_plan(plan: SyncPlan) -> Result<()> {
                 );
 
                 for file in &dot.files {
-                    apply_file(file)?;
+                    let action_types = apply_file(file)?;
+                    for at in action_types {
+                        let action = Action::new(at, Some(dot.name.clone()));
+                        session.add_action(action);
+                    }
                 }
             }
             SyncItem::Package(pkg) => {
-                info!(
-                    name = %pkg.name,
-                    action = ?pkg.action,
-                    "package"
-                );
-                // TODO(Phase 3): invoke PackageManager, record Action::PackageInstalled
+                match &pkg.action {
+                    PackageAction::AlreadyInstalled => {
+                        info!(name = %pkg.name, "package already installed, skipping");
+                    }
+                    PackageAction::Skip { reason } => {
+                        info!(name = %pkg.name, reason = %reason, "⊘ skipping package");
+                    }
+                    PackageAction::Install => {
+                        info!(
+                            name = %pkg.name,
+                            install_name = %pkg.install_name,
+                            manager = ?pkg.manager_name,
+                            "installing package"
+                        );
+                        install_package(pkg);
+                    }
+                    PackageAction::Prune => {
+                        info!(name = %pkg.name, "package prune not yet implemented");
+                    }
+                }
             }
         }
     }
 
+    session.complete();
+    if !session.is_empty() {
+        storage.save_session(&session).map_err(|e| BombadilError::Io {
+            context: format!("failed to save audit session: {e}"),
+            source: std::io::Error::new(std::io::ErrorKind::Other, e.to_string()),
+        })?;
+        info!(
+            session_id = %session.id,
+            actions = session.actions.len(),
+            "sync session saved"
+        );
+    }
+
     info!("sync complete");
-    // TODO(Phase 2): persist Session to audit storage
     Ok(())
 }
 
-/// Apply a single file mapping (symlink or copy).
-fn apply_file(file: &PlannedFile) -> Result<()> {
+/// Install a package using the manager recorded in the plan.
+///
+/// Failures are logged as warnings; a single package failure does not abort the run.
+fn install_package(pkg: &PlannedPackage) {
+    use crate::packages::managers::{
+        apt::Apt, brew::Brew, cargo::Cargo, dnf::Dnf, flatpak::Flatpak, pacman::Pacman,
+        PackageManager as PkgMgr,
+    };
+    use tracing::warn;
+
+    let mgr: Option<Box<dyn PkgMgr>> = match pkg.manager_name.as_deref() {
+        Some("dnf") => Some(Box::new(Dnf)),
+        Some("apt") => Some(Box::new(Apt)),
+        Some("brew") => Some(Box::new(Brew)),
+        Some("pacman") => Some(Box::new(Pacman)),
+        Some("cargo") => Some(Box::new(Cargo)),
+        Some("flatpak") => Some(Box::new(Flatpak)),
+        _ => None,
+    };
+
+    match mgr {
+        Some(m) => {
+            if let Err(e) = m.install(&pkg.install_name) {
+                warn!(
+                    name = %pkg.name,
+                    install_name = %pkg.install_name,
+                    error = %e,
+                    "package install failed"
+                );
+            }
+        }
+        None => {
+            warn!(name = %pkg.name, "no package manager available, skipping install");
+        }
+    }
+}
+
+/// Apply a single file mapping (symlink or copy) and return the audit actions produced.
+fn apply_file(file: &PlannedFile) -> Result<Vec<crate::audit::ActionType>> {
+    use crate::audit::ActionType;
     use crate::core::BombadilError;
     use std::fs;
     use tracing::{debug, warn};
 
     if !file.source.exists() {
         warn!(source = %file.source.display(), "source file not found, skipping");
-        return Ok(());
+        return Ok(vec![]);
     }
 
     // Ensure target parent directory exists
@@ -142,6 +251,8 @@ fn apply_file(file: &PlannedFile) -> Result<()> {
         }
     }
 
+    let mut actions: Vec<ActionType> = Vec::new();
+
     match &file.action {
         DotAction::Backup { original } => {
             // Back up unmanaged file before overwriting
@@ -152,12 +263,20 @@ fn apply_file(file: &PlannedFile) -> Result<()> {
                 "backing up existing file"
             );
             if original.exists() {
+                let orig_content = fs::read(original).unwrap_or_default();
+                let orig_hash = crate::audit::sha256_hash(&orig_content);
                 fs::rename(original, &backup).map_err(|e| BombadilError::Io {
                     context: format!("failed to backup {}", original.display()),
                     source: e,
                 })?;
+                actions.push(ActionType::Backup {
+                    original: original.clone(),
+                    backup_location: backup,
+                    content_hash: orig_hash,
+                });
             }
             create_link_or_copy(file)?;
+            actions.push(make_link_action(file));
         }
         DotAction::Update => {
             // Remove old symlink/file before relinking
@@ -168,9 +287,11 @@ fn apply_file(file: &PlannedFile) -> Result<()> {
                 })?;
             }
             create_link_or_copy(file)?;
+            actions.push(make_link_action(file));
         }
         DotAction::Create => {
             create_link_or_copy(file)?;
+            actions.push(make_link_action(file));
         }
         DotAction::Unchanged => {
             debug!(target = %file.target.display(), "unchanged, skipping");
@@ -178,7 +299,27 @@ fn apply_file(file: &PlannedFile) -> Result<()> {
         DotAction::Skip { .. } => {}
     }
 
-    Ok(())
+    Ok(actions)
+}
+
+/// Build the audit `ActionType` for a completed link-or-copy operation.
+fn make_link_action(file: &PlannedFile) -> crate::audit::ActionType {
+    use crate::audit::ActionType;
+
+    if file.copy {
+        let content = std::fs::read(&file.source).unwrap_or_default();
+        let hash = crate::audit::sha256_hash(&content);
+        ActionType::FileCreate {
+            target: file.target.clone(),
+            source: file.source.clone(),
+            content_hash: hash,
+        }
+    } else {
+        ActionType::SymlinkCreate {
+            source: file.source.clone(),
+            target: file.target.clone(),
+        }
+    }
 }
 
 /// Create a symlink or file copy for a planned file.

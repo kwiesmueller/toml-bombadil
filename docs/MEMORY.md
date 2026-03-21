@@ -5,8 +5,17 @@
 **Phase 1 complete** — committed on `main` branch.
 - Commit `f30f90f`: consolidation baseline (all prior v4 work committed)
 - Commit `9af0802`: Phase 1 — new config schema, dots.toml discovery, SyncEngine
+- Commit `cc6ae7e`: MEMORY.md added to docs/
 
-**Test status**: 254 lib tests + 18 e2e tests + 1 doc-test = 273 total, all passing.
+**Phase 2 in progress** — NOT yet committed. Working on `main`.
+- `execute_plan()` now creates AuditStorage + Session, runs hooks with `Hook::run_capture()`,
+  records `SymlinkCreate`/`FileCreate`/`Backup` actions, and saves Session at end of run.
+- Created v4 `packages/drift.rs` (DriftReport via PackageManager trait).
+- Created stubs `packages/discover.rs`, `packages/persist.rs`, `packages/install.rs`
+  to fix pre-existing compile errors (missing module files). These will be deleted in Phase 4.
+
+**Test status**: 243 lib tests + 18 e2e tests + 1 doc-test = 262 total, all passing.
+(Note: stale `target/release/bombadil` binary from Apr 2025 was deleted; e2e tests now use debug binary.)
 
 ## Project Structure
 - `src/config/` - v4 config types with JsonSchema (schema.rs, loader.rs, toml_loader.rs)
@@ -64,7 +73,7 @@ Key types in `src/config/schema.rs`:
   5. Per-file action planning (Create/Update/Unchanged/Backup)
   6. Skip propagation (DependencyUnavailable/DependencySkipped)
   7. Interleave with per-dot and global hooks
-- `execute_plan(plan)` → creates symlinks/copies, stubs for hooks+packages
+- `execute_plan(plan)` → runs hooks (Hook::run_capture), creates symlinks/copies, records audit Session
 - CLI: `bombadil bombadil-sync [--dry-run] [--tags ...] [--only-dots] [--only-packages] [--prune-packages]`
   (temporary name; will become `bombadil sync` when old `link` is deleted in Phase 4)
 
@@ -86,7 +95,7 @@ Key types in `src/config/schema.rs`:
 
 ## Remaining Phases
 
-- **Phase 2**: Integrate audit recording + real hook execution in execute_plan()
+- **Phase 2**: ✓ Audit recording + hook execution in execute_plan() (done, not yet committed)
 - **Phase 3**: Real PackageManager integration (replace stubs in plan_packages_for_dot)
 - **Phase 4**: Delete v3 modules (src/settings/, src/paths/, src/templating.rs, src/error.rs,
   bulk of src/lib.rs). Rename BombadilSync → Sync in CLI.

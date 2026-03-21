@@ -172,8 +172,12 @@ impl SkipReason {
 #[derive(Debug)]
 pub struct PlannedPackage {
     pub name: String,
-    /// Optional manager-specific install name override.
-    pub install_name: Option<String>,
+    /// Resolved install name for the active package manager.
+    /// Falls back to `name` when no manager-specific override is declared.
+    pub install_name: String,
+    /// The package manager to use, e.g. `"dnf"`, `"apt"`, `"brew"`.
+    /// `None` when no compatible manager is available on this system.
+    pub manager_name: Option<String>,
     pub action: PackageAction,
     pub prehooks: Vec<String>,
     pub posthooks: Vec<String>,
@@ -346,7 +350,7 @@ pub fn build_sync_plan(config_path: &Path, options: &SyncOptions) -> Result<Sync
         };
 
         // Plan packages for this dot
-        let packages = plan_packages_for_dot(dot_def, options);
+        let packages = plan_packages_for_dot(dot_def, &active_tags);
 
         let planned = PlannedDot {
             name: name.clone(),
@@ -400,6 +404,7 @@ pub fn build_sync_plan(config_path: &Path, options: &SyncOptions) -> Result<Sync
                 items.push(SyncItem::Package(PlannedPackage {
                     name: pkg.name.clone(),
                     install_name: pkg.install_name.clone(),
+                    manager_name: pkg.manager_name.clone(),
                     action: pkg.action.clone(),
                     prehooks: pkg.prehooks.clone(),
                     posthooks: pkg.posthooks.clone(),
@@ -658,25 +663,102 @@ fn derive_dot_action(files: &[PlannedFile]) -> DotAction {
 }
 
 /// Plan packages from a dot definition.
-fn plan_packages_for_dot(dot_def: &DotDefinition, options: &SyncOptions) -> Vec<PlannedPackage> {
+///
+/// Detects available package managers, resolves per-package install names,
+/// and checks whether each package is already installed.
+fn plan_packages_for_dot(
+    dot_def: &DotDefinition,
+    active_tags: &HashSet<String>,
+) -> Vec<PlannedPackage> {
+    use crate::packages::managers::{
+        apt::Apt, brew::Brew, cargo::Cargo, dnf::Dnf, flatpak::Flatpak, pacman::Pacman,
+        PackageManager as PkgMgr,
+    };
+
+    // Build ordered list of candidate managers. First available one wins.
+    let candidates: Vec<(&str, Box<dyn PkgMgr>)> = vec![
+        ("dnf", Box::new(Dnf)),
+        ("apt", Box::new(Apt)),
+        ("brew", Box::new(Brew)),
+        ("pacman", Box::new(Pacman)),
+        ("cargo", Box::new(Cargo)),
+        ("flatpak", Box::new(Flatpak)),
+    ];
+
+    // Filter to managers actually present on this system.
+    let available: Vec<(&str, &dyn PkgMgr)> = candidates
+        .iter()
+        .filter(|(_, m)| m.is_available())
+        .map(|(name, m)| (*name, m.as_ref()))
+        .collect();
+
     dot_def
         .packages
         .iter()
-        .map(|(name, pkg)| {
-            // Stub: all packages are planned as Install for now.
-            // Phase 3 will integrate actual PackageManager::is_installed() checks.
+        .filter(|(_, pkg)| {
+            // Package is included when:
+            //  - it has no tags (always-include), OR
+            //  - at least one of its tags is in the active tag set
+            pkg.tags.is_empty() || pkg.tags.iter().any(|t| active_tags.contains(t))
+        })
+        .map(|(canonical, pkg)| {
+            // Find the first available manager that can handle this package.
+            let resolved = available.iter().find_map(|(mgr_name, mgr)| {
+                let install_name = resolve_install_name(canonical, pkg, mgr_name);
+                Some((*mgr_name, install_name, *mgr))
+            });
+
+            let action = if let Some((_, ref install_name, mgr)) = resolved {
+                match mgr.is_installed(install_name) {
+                    Ok(true) => PackageAction::AlreadyInstalled,
+                    _ => PackageAction::Install,
+                }
+            } else {
+                PackageAction::Skip {
+                    reason: "no compatible package manager available on this system".to_string(),
+                }
+            };
+
+            let (install_name, manager_name) = match resolved {
+                Some((mgr_name, name, _)) => (name, Some(mgr_name.to_string())),
+                None => (canonical.clone(), None),
+            };
+
             PlannedPackage {
-                name: name.clone(),
-                install_name: pkg
-                    .install
-                    .as_ref()
-                    .and_then(|m| m.dnf.clone().or(m.brew.clone()).or(m.apt.clone())),
-                action: PackageAction::Install,
+                name: canonical.clone(),
+                install_name,
+                manager_name,
+                action,
                 prehooks: pkg.prehooks.clone(),
                 posthooks: pkg.posthooks.clone(),
             }
         })
         .collect()
+}
+
+/// Resolve the install name for a package on a specific manager.
+///
+/// Uses the manager-specific override if declared; otherwise falls back
+/// to the canonical package key name (registry stub — always returns key name).
+fn resolve_install_name(canonical: &str, pkg: &crate::config::DotPackage, manager: &str) -> String {
+    let Some(install) = &pkg.install else {
+        return canonical.to_string();
+    };
+
+    let override_name = match manager {
+        "dnf" => install.dnf.as_deref(),
+        "apt" => install.apt.as_deref(),
+        "brew" => install.brew.as_deref(),
+        "pacman" => install.pacman.as_deref(),
+        "flatpak" => install.flatpak.as_deref(),
+        "cargo" => install.cargo.as_ref().map(|c| match c {
+            crate::config::CargoInstall::Simple(s) => s.as_str(),
+            crate::config::CargoInstall::Full { name, .. } => name.as_str(),
+        }),
+        _ => None,
+    };
+
+    override_name.unwrap_or(canonical).to_string()
 }
 
 /// Collect global hooks from settings and active profile.
