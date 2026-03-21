@@ -1,0 +1,18 @@
+[dot]
+name = "zsh"
+vars = ["vars.toml"]
+
+# ── Files ────────────────────────────────────────────────────────────────────
+# source (relative to this file) = target
+
+[dot.files]
+"zshrc"    = "~/.zshrc"
+"zshenv"   = "~/.zshenv"
+"aliases"  = "~/.config/zsh/aliases"
+
+# ── Packages ─────────────────────────────────────────────────────────────────
+
+[dot.packages.zsh]
+posthooks = ["chsh -s $(which zsh)"]
+
+[dot.packages.zsh-completions]

@@ -1,0 +1,19 @@
+# Theme variables - can be swapped for different color schemes
+# Demonstrates variable organization by purpose
+
+# Color palette
+background = "#1a1b26"
+foreground = "#c0caf5"
+selection = "#33467c"
+comment = "#565f89"
+
+# Accent colors
+color_primary = "#7aa2f7"
+color_secondary = "#bb9af7"
+color_success = "#9ece6a"
+color_warning = "#e0af68"
+color_error = "#f7768e"
+
+# UI elements
+border_color = "#3b4261"
+cursor_color = "#c0caf5"

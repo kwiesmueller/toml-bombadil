@@ -1,0 +1,26 @@
+# Semantic patch for INI files
+# Section-aware merging for .ini/.conf/.desktop files
+
+[patch]
+format = "ini"
+
+# Merge values into sections
+[patch.merge]
+[patch.merge.General]
+Author = "dotfiles-user"
+
+[patch.merge.Window]
+Width = "1920"
+Height = "1080"
+Maximized = "true"
+FullScreen = "false"
+
+[patch.merge.Shortcuts]
+Undo = "Ctrl+Z"
+Redo = "Ctrl+Shift+Z"
+Find = "Ctrl+F"
+
+# Add new section
+[patch.merge.Advanced]
+EnablePlugins = "true"
+DebugMode = "false"

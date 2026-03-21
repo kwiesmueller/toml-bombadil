@@ -1,0 +1,26 @@
+[dot]
+name = "kitty"
+vars = ["vars.toml"]
+tags = ["gui"]
+
+# ── Files ────────────────────────────────────────────────────────────────────
+
+[dot.files]
+"kitty.conf" = "~/.config/kitty/kitty.conf"
+"themes/"    = "~/.config/kitty/themes/"    # whole directory
+
+# ── Profile overrides ────────────────────────────────────────────────────────
+# Profile differences stay here, not in the root bombadil.toml.
+# vars override is enough for most cases (font size, colours, etc.)
+
+[dot.profiles.work]
+vars = ["profiles/work.toml"]
+
+# For cases where a completely different file is needed per profile:
+# [dot.profiles.work.files]
+# "kitty-hidpi.conf" = "~/.config/kitty/kitty.conf"   # replaces kitty.conf for work
+
+# ── Packages ─────────────────────────────────────────────────────────────────
+
+[dot.packages.kitty]
+tags = ["gui"]

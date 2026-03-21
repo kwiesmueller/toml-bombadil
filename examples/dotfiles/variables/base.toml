@@ -1,0 +1,23 @@
+# Base variables - available in all templates
+# These demonstrate Tera variable substitution
+
+# Simple string values
+editor = "nvim"
+terminal = "alacritty"
+shell = "zsh"
+browser = "firefox"
+
+# Numeric values (as strings for template substitution)
+font_size = "14"
+tab_width = "4"
+
+# Paths
+config_dir = "~/.config"
+local_bin = "~/.local/bin"
+
+# Feature flags
+enable_debug = "false"
+show_hidden = "true"
+
+# Variable referencing another variable (use %variable_name syntax)
+default_app = "%terminal"

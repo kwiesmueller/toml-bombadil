@@ -1,0 +1,14 @@
+# Patch file 01: Keybinding changes
+
+# Replace specific keybindings
+[[set]]
+match = '^quit = ".*"'
+value = 'quit = "Ctrl+Q"'
+
+# Insert new keybindings after existing ones
+[[insert]]
+after = '^open = ".*"'
+lines = """
+new = "Ctrl+N"
+search = "Ctrl+F"
+"""

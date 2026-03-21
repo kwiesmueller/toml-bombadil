@@ -252,7 +252,7 @@ impl DotVar for DotOverride {
 
 #[cfg(test)]
 mod tests {
-    use crate::dots::DotVar;
+    use crate::dots_legacy::DotVar;
     use crate::settings::dots::Dot;
     use crate::templating::Variables;
     use crate::Mode::NoGpg;

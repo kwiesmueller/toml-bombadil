@@ -1,0 +1,19 @@
+[dot]
+name      = "nvim"
+prehooks  = ["mkdir -p ~/.local/share/nvim"]
+posthooks = ["nvim --headless '+Lazy sync' +qa 2>/dev/null || true"]
+
+# ── Files ────────────────────────────────────────────────────────────────────
+# lsp/ is excluded automatically — it has its own dots.toml
+
+[dot.files]
+"init.lua" = "~/.config/nvim/init.lua"
+"lua/"     = "~/.config/nvim/lua/"
+"after/"   = "~/.config/nvim/after/"
+
+# ── Packages ─────────────────────────────────────────────────────────────────
+
+[dot.packages.neovim]
+install.dnf  = "neovim"
+install.brew = "neovim"
+posthooks    = ["nvim --headless '+checkhealth' +qa 2>/dev/null || true"]

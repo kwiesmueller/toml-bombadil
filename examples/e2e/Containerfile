@@ -1,0 +1,58 @@
+# Containerfile for bombadil e2e testing
+# Provides isolated environment for running tests
+#
+# Build targets:
+#   runtime  - Base runtime environment (no binary, use with volume mount)
+#   default  - Full build with compiled binary
+#
+# Examples:
+#   podman build -t bombadil-runtime --target runtime .
+#   podman build -t bombadil-e2e .
+
+# =============================================================================
+# Runtime base - shared by all targets
+# =============================================================================
+FROM registry.fedoraproject.org/fedora:40 AS runtime
+
+# Install minimal tools needed for testing
+RUN dnf install -y \
+    bash \
+    coreutils \
+    diffutils \
+    tree \
+    nano \
+    vim \
+    && dnf clean all
+
+# Create test user (non-root for realistic testing)
+RUN useradd -m -s /bin/bash testuser
+
+# Switch to test user
+USER testuser
+WORKDIR /home/testuser
+
+# Default shell
+CMD ["/bin/bash"]
+
+# =============================================================================
+# Builder - compiles bombadil from source
+# =============================================================================
+FROM registry.fedoraproject.org/fedora:40 AS builder
+
+# Install Rust and build dependencies
+RUN dnf install -y rust cargo gcc make openssl-devel && dnf clean all
+
+WORKDIR /build
+COPY Cargo.toml Cargo.lock ./
+COPY src ./src
+
+# Build bombadil in release mode
+RUN cargo build --release
+
+# =============================================================================
+# Full image - runtime with compiled binary
+# =============================================================================
+FROM runtime AS default
+
+# Copy bombadil binary from builder
+COPY --from=builder /build/target/release/bombadil /usr/local/bin/bombadil

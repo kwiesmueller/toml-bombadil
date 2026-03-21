@@ -1,0 +1,13 @@
+dotfiles_dir = "~/dotfiles"
+gpg_user_id  = "me@example.com"
+
+[settings]
+vars      = ["vars.toml"]
+prehooks  = ["echo 'syncing...'"]
+posthooks = ["echo 'done'"]
+
+# Profiles are just activation flags.
+# Per-dot behaviour lives in the dot's own dots.toml.
+[profiles.work]
+[profiles.minimal]
+package_exclude_tags = ["gui"]

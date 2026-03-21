@@ -1,0 +1,3 @@
+# This file matches cache/** ignore pattern
+# It will NOT be linked to target
+cached = "ignored"

@@ -1,0 +1,6 @@
+# Dot-specific variables
+# These override global vars for this specific dot only
+
+local_override = "this_is_local"
+# Can override global vars too
+font_size = "16"

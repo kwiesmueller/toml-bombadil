@@ -1,0 +1,10 @@
+# Laptop-specific variables
+# Override base values for laptop profile
+
+# Smaller font for laptop screen
+font_size = "12"
+
+# Laptop-specific settings
+battery_threshold = "20"
+screen_brightness = "70"
+power_profile = "balanced"

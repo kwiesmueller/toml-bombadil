@@ -12,6 +12,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus, Stdio};
 use std::{fs, io};
+use tracing::{debug, info, warn};
 
 pub trait DotPaths {
     /// Return the target path of a dot entry either absolute or relative to $HOME
@@ -125,7 +126,7 @@ impl DotPaths for Dot {
 
         if let Some(parent) = target.parent() {
             if !parent.exists() {
-                println!("Creating parent: {:?}", parent);
+                debug!(parent = ?parent, "Creating parent directory");
                 let create_fs_err = fs::create_dir_all(parent);
                 match create_fs_err {
                     Ok(_) => Ok(()),
@@ -164,10 +165,7 @@ impl DotPaths for Dot {
         // Make hard copy if needed.
         if !hard_copy_exists {
             if let Some(hard_copy_target) = hard_copy_target.clone() {
-                println!(
-                    "Making hard copy for file: {:?} -> {:?}",
-                    target, hard_copy_target
-                );
+                debug!(source = ?target, dest = ?hard_copy_target, "Making hard copy");
                 copy(target, hard_copy_target.as_path())?;
             }
         }
@@ -176,10 +174,7 @@ impl DotPaths for Dot {
         if !hard_copy_permissions_match {
             if let Some(hard_copy_target) = hard_copy_target.clone() {
                 if let Some(hard_copy_permissions) = self.hard_copy_permissions {
-                    println!(
-                        "Setting permissions for hard copy: {:?} -> {:o}",
-                        hard_copy_target, hard_copy_permissions
-                    );
+                    debug!(path = ?hard_copy_target, permissions = format!("{:o}", hard_copy_permissions), "Setting hard copy permissions");
                     set_permissions(hard_copy_target.as_path(), hard_copy_permissions)?;
                 }
             }
@@ -210,14 +205,11 @@ fn move_original_to_backup(target: &Path) -> Result<()> {
         target
     };
     let backup_path = dotfile_dir().join(".backups").join(target_as_non_absolute);
-    println!(
-        "Backing up original file: {:?} to {:?}",
-        target, backup_path
-    );
+    info!(target = ?target, backup = ?backup_path, "Backing up original file");
 
     if let Some(parent) = backup_path.parent() {
         if !parent.exists() {
-            println!("Creating backup parent: {:?}", parent);
+            debug!(parent = ?parent, "Creating backup parent directory");
             fs::create_dir_all(parent).map_err(|cause| Backup {
                 target: target.to_path_buf(),
                 backup_path: backup_path.clone(),
@@ -226,17 +218,14 @@ fn move_original_to_backup(target: &Path) -> Result<()> {
         }
     }
 
-    println!(
-        "Copying original file to backup: {:?} -> {:?}",
-        target, backup_path
-    );
+    debug!(source = ?target, dest = ?backup_path, "Copying original file to backup");
     copy(target, &backup_path).map_err(|cause| Backup {
         target: target.to_path_buf(),
         backup_path,
         cause: cause.into(),
     })?;
 
-    println!("Deleting original file: {:?}", target);
+    debug!(target = ?target, "Deleting original file");
     unlink(target)?;
 
     Ok(())
@@ -245,7 +234,7 @@ fn move_original_to_backup(target: &Path) -> Result<()> {
 fn copy(from: &Path, to: &Path) -> Result<()> {
     if let Some(parent) = to.parent() {
         if !parent.exists() {
-            println!("Creating copy target parent: {:?}", parent);
+            debug!(parent = ?parent, "Creating copy target parent directory");
             fs::create_dir_all(parent).map_err(|cause| Copy {
                 from: from.to_path_buf(),
                 to: to.to_path_buf(),
@@ -254,12 +243,12 @@ fn copy(from: &Path, to: &Path) -> Result<()> {
         }
     }
 
-    println!("Copying file: {:?} -> {:?}", from, to);
+    debug!(source = ?from, dest = ?to, "Copying file");
     match fs::copy(from, to) {
         Ok(_) => (),
         Err(cause) => match cause.kind() {
             std::io::ErrorKind::PermissionDenied => {
-                println!("Copying file (as sudo): {:?} -> {:?}", from, to);
+                debug!(source = ?from, dest = ?to, "Copying file with sudo");
                 let status = run_cmd(
                     format!("copy `{:?} -> {:?}`", from, to),
                     Command::new("sudo").arg("cp").arg("-R").arg(from).arg(to),
@@ -286,17 +275,14 @@ fn copy(from: &Path, to: &Path) -> Result<()> {
 }
 
 fn set_permissions(path: &Path, permissions: u32) -> Result<()> {
-    println!("Setting permissions: {:?} -> {:o}", path, permissions);
+    debug!(path = ?path, permissions = format!("{:o}", permissions), "Setting permissions");
 
     let perm = fs::Permissions::from_mode(permissions);
     match fs::set_permissions(path, perm) {
         Ok(_) => (),
         Err(cause) => match cause.kind() {
             std::io::ErrorKind::PermissionDenied => {
-                println!(
-                    "Setting permissions (as sudo): {:?} -> {:o}",
-                    path, permissions
-                );
+                debug!(path = ?path, permissions = format!("{:o}", permissions), "Setting permissions with sudo");
                 let status = run_cmd(
                     format!("chmod `{:o} {:?}`", permissions, path),
                     Command::new("sudo")
@@ -336,7 +322,7 @@ fn symlink_as_sudo(dot: &Dot) -> Result<()> {
     }
 
     if let Some(parent) = target.parent() {
-        println!("Creating parent (as sudo): {:?}", parent);
+        debug!(parent = ?parent, "Creating parent directory with sudo");
         let status = run_cmd(
             format!("mkdir `{:?}`", parent),
             Command::new("sudo").arg("mkdir").arg("-p").arg(parent),
@@ -354,10 +340,7 @@ fn symlink_as_sudo(dot: &Dot) -> Result<()> {
         }
     }
 
-    println!(
-        "Creating symlink (as sudo): {:?} -> {:?}",
-        copy_path, target
-    );
+    debug!(source = ?copy_path, target = ?target, "Creating symlink with sudo");
     let status = run_cmd(
         format!("link `{:?} -> {:?}`", copy_path, target),
         Command::new("sudo")
@@ -411,7 +394,7 @@ fn unlink_sudo<P: AsRef<Path> + ?Sized>(path: &P) -> Result<()> {
         return Ok(());
     }
 
-    println!("Deleting symlink (as sudo): {:?}", path.as_ref());
+    debug!(path = ?path.as_ref(), "Deleting symlink with sudo");
     let status = run_cmd(
         format!("unlink `{}`", path.as_ref().display()),
         Command::new("sudo").arg("rm").arg("-rf").arg(path.as_ref()),
@@ -434,11 +417,11 @@ fn run_cmd(log_prefix: String, cmd: &mut Command) -> io::Result<ExitStatus> {
 
     BufReader::new(child.stdout.take().unwrap())
         .lines()
-        .for_each(|line| println!("[{}] {}", log_prefix, line.unwrap_or_else(|_| "".into())));
+        .for_each(|line| debug!(cmd = %log_prefix, "{}", line.unwrap_or_default()));
 
     BufReader::new(child.stderr.take().unwrap())
         .lines()
-        .for_each(|line| eprintln!("[{}] {}", log_prefix, line.unwrap_or_else(|_| "".into())));
+        .for_each(|line| warn!(cmd = %log_prefix, "{}", line.unwrap_or_default()));
 
     child.wait()
 }

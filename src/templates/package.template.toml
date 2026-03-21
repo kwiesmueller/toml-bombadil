@@ -1,0 +1,47 @@
+[packages.{{name}}]
+tags = [{{tags}}]  # Add your tags here
+
+[packages.{{name}}.install]
+# Uncomment and configure the install method(s) you want:
+
+# System package managers (uncomment one):
+# dnf = "{{name}}"
+# apt = "{{name}}"
+# brew = "{{name}}"
+# pacman = "{{name}}"
+
+# Cargo (Rust packages):
+# cargo = "{{name}}"
+# cargo = { git = "https://github.com/user/{{name}}", branch = "main" }
+
+# Go packages:
+# go = "github.com/user/{{name}}@latest"
+
+# Binary download from URL:
+# [packages.{{name}}.install.binary]
+# url = "https://example.com/releases/v{{version}}/{{name}}-{{os}}-{{arch}}"
+# version = "1.0.0"
+# target = "~/.local/bin/{{name}}"
+
+# Binary download from GitHub release:
+# [packages.{{name}}.install.binary]
+# github = "user/{{name}}"
+# asset_pattern = "{{name}}-v{{version}}-{{os}}-{{arch}}.tar.gz"
+# target = "~/.local/bin/{{name}}"
+# [packages.{{name}}.install.binary.archive]
+# format = "tar.gz"
+# binary_path = "{{name}}"
+
+# Flatpak:
+# flatpak = "org.example.{{name}}"
+
+# Git clone and build:
+# [packages.{{name}}.install.git]
+# url = "https://github.com/user/{{name}}"
+# build = "make install"
+# target = "~/src/{{name}}"
+
+# Local source directory:
+# [packages.{{name}}.install.source]
+# path = "~/projects/{{name}}"
+# build = "cargo install --path ."

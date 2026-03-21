@@ -1,0 +1,22 @@
+# Patch file 02: Feature flag changes
+
+# Disable telemetry and auto-update
+[[set]]
+match = '^enable_telemetry = .*'
+value = 'enable_telemetry = false'
+
+[[set]]
+match = '^auto_update = .*'
+value = 'auto_update = false'
+
+# Delete the splash screen line entirely
+[[delete]]
+match = '^show_splash = .*'
+
+# Insert custom feature flags
+[[insert]]
+after = '^auto_update = .*'
+lines = """
+enable_vim_mode = true
+show_line_numbers = true
+"""

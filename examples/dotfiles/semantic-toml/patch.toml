@@ -1,0 +1,26 @@
+# Semantic patch for TOML files
+# Type-aware merging for TOML configuration
+
+[patch]
+format = "toml"
+
+# Merge configuration
+[patch.merge]
+[patch.merge.application]
+version = "2.0.0"
+author = "dotfiles-user"
+
+[patch.merge.server]
+port = 8080
+host = "0.0.0.0"
+workers = 4
+
+[patch.merge.logging]
+level = "debug"
+output = "file"
+path = "/var/log/app.log"
+
+# Array operations for plugins
+[[patch.arrays."plugins.enabled"]]
+operation = "append"
+value = ["plugin_b", "plugin_c"]

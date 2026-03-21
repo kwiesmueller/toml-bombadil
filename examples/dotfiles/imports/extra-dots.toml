@@ -1,0 +1,6 @@
+# Additional dot definitions via import
+# Keeps main bombadil.toml clean
+
+[settings.dots.imported-config]
+source = "imported/config.conf"
+target = ".config/imported/config.conf"

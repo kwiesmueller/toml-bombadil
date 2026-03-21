@@ -1,0 +1,15 @@
+# Patch file 00: Theme changes
+# Patches are applied in alphabetical order (00, 01, 02, ...)
+
+# Replace lines matching a pattern
+[[set]]
+match = '^theme = ".*"'
+value = 'theme = "dark"'
+
+[[set]]
+match = '^background = ".*"'
+value = 'background = "#1a1b26"'
+
+[[set]]
+match = '^foreground = ".*"'
+value = 'foreground = "#c0caf5"'

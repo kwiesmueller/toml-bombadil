@@ -1,0 +1,7 @@
+#!/bin/bash
+# Script demonstrating hard copy with executable permissions
+# This will be copied (not symlinked) to ~/.local/bin/ with 755 permissions
+
+echo "This script was installed via bombadil hard copy"
+echo "Editor: nvim"
+echo "Terminal: alacritty"

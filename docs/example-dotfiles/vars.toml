@@ -1,0 +1,5 @@
+[vars]
+font_family = "JetBrains Mono"
+font_size   = "13"
+theme       = "catppuccin-mocha"
+terminal    = "kitty"

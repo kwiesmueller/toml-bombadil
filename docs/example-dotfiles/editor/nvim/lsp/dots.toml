@@ -1,0 +1,13 @@
+[dot]
+name       = "nvim-lsp"
+depends_on = ["nvim"]
+
+[dot.files]
+"servers.lua" = "~/.config/nvim/lsp/servers.lua"
+"config/"     = "~/.config/nvim/lsp/config/"
+
+[dot.packages.lua-language-server]
+[dot.packages.rust-analyzer]
+
+[dot.packages.typescript-language-server]
+install.npm = "typescript-language-server"

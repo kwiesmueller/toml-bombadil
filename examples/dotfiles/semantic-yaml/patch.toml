@@ -1,0 +1,31 @@
+# Semantic patch for YAML files
+# Preserves YAML structure and comments where possible
+
+[patch]
+format = "yaml"
+
+# Deep merge configuration
+[patch.merge]
+[patch.merge.server]
+port = 9000
+timeout = 60
+ssl = true
+
+[patch.merge.logging]
+level = "debug"
+format = "json"
+file = "/var/log/app.log"
+
+[patch.merge.database]
+driver = "postgres"
+host = "localhost"
+port = 5432
+
+# Delete keys
+[patch.delete]
+keys = ["database.path"]
+
+# Array operations
+[[patch.arrays.features]]
+operation = "append"
+value = ["feature_c", "feature_d"]

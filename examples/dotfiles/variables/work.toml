@@ -1,0 +1,13 @@
+# Work-specific variables
+# Additional overrides for work profile
+
+# Work email/identity
+user_email = "user@company.com"
+git_signing_key = "ABCD1234"
+
+# Work-specific paths
+projects_dir = "~/work/projects"
+notes_dir = "~/work/notes"
+
+# Corporate proxy (if needed)
+# http_proxy = "http://proxy.company.com:8080"

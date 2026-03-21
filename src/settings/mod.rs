@@ -13,6 +13,7 @@ use std::path::PathBuf;
 
 pub mod dots;
 pub mod imports;
+pub mod packages;
 pub mod profiles;
 
 lazy_static! {

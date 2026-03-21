@@ -1,0 +1,33 @@
+# Imported package definitions
+# Demonstrates config organization via imports
+
+[settings.packages.demo-cli-tool]
+tags = ["essential", "cli"]
+[settings.packages.demo-cli-tool.install]
+dnf = "demo-cli"
+apt = "demo-cli"
+brew = "demo-cli"
+
+[settings.packages.demo-editor]
+tags = ["essential", "editor"]
+[settings.packages.demo-editor.install]
+dnf = "demo-editor"
+apt = "demo-editor"
+brew = "demo-editor"
+cargo = "demo-editor"
+
+[settings.packages.demo-heavy-package]
+tags = ["heavy", "optional"]
+[settings.packages.demo-heavy-package.install]
+dnf = "demo-heavy"
+apt = "demo-heavy"
+
+[settings.packages.demo-laptop-tool]
+tags = ["laptop"]
+[settings.packages.demo-laptop-tool.install]
+dnf = "laptop-tool"
+
+[settings.packages.demo-server-tool]
+tags = ["server"]
+[settings.packages.demo-server-tool.install]
+dnf = "server-tool"

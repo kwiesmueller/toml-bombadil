@@ -1,0 +1,10 @@
+[dot]
+name       = "zsh-plugins"
+depends_on = ["zsh"]
+
+[dot.files]
+"plugins.zsh" = "~/.config/zsh/plugins.zsh"
+
+[dot.packages.zsh-autosuggestions]
+[dot.packages.zsh-syntax-highlighting]
+[dot.packages.fzf]

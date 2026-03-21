@@ -4,6 +4,22 @@ use serde::{Deserialize, Serialize};
 use std::io::{BufRead, BufReader};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
+use tracing::{debug, info, warn};
+
+/// Result of running a hook.
+#[derive(Debug)]
+pub struct HookResult {
+    pub command: String,
+    pub exit_code: i32,
+    pub stdout: Vec<String>,
+    pub stderr: Vec<String>,
+}
+
+impl HookResult {
+    pub fn success(&self) -> bool {
+        self.exit_code == 0
+    }
+}
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct Hook {
@@ -15,6 +31,50 @@ pub struct Hook {
 const ENV_BOMBADIL_DOTFILES_PATH: &str = "BOMBADIL_DOTFILES_PATH";
 
 impl Hook {
+    /// Run the hook and capture output without printing.
+    pub(crate) fn run_capture(&self) -> Result<HookResult> {
+        debug!(command = %self.command, "Running hook");
+
+        let mut child = Command::new("sh");
+        let mut child = child
+            .args(["-c", &self.command])
+            .stderr(Stdio::piped())
+            .stdout(Stdio::piped())
+            .env(ENV_BOMBADIL_DOTFILES_PATH, self.dotfiles_path.as_os_str());
+
+        if self.run_in_dotfiles_dir {
+            child = child.current_dir(&self.dotfiles_path);
+        }
+
+        let mut child = child.spawn()?;
+
+        let stdout: Vec<String> = BufReader::new(child.stdout.take().unwrap())
+            .lines()
+            .filter_map(|line| line.ok())
+            .collect();
+
+        let stderr: Vec<String> = BufReader::new(child.stderr.take().unwrap())
+            .lines()
+            .filter_map(|line| line.ok())
+            .collect();
+
+        let exit_code = child.wait()?.code().unwrap_or(-1);
+
+        if exit_code == 0 {
+            info!(command = %self.command, "Hook completed successfully");
+        } else {
+            warn!(command = %self.command, exit_code, "Hook failed");
+        }
+
+        Ok(HookResult {
+            command: self.command.clone(),
+            exit_code,
+            stdout,
+            stderr,
+        })
+    }
+
+    /// Run the hook with legacy output (for backwards compatibility).
     pub(crate) fn run(&self) -> Result<()> {
         let command_display = format!("`{}`", &self.command.green());
         println!("Running install hook : {}", command_display);

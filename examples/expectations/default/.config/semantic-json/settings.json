@@ -1,0 +1,9 @@
+{
+  "editor.fontSize": 14,
+  "editor.fontFamily": "JetBrains Mono",
+  "editor.tabSize": 2,
+  "workbench.colorTheme": "Tokyo Night",
+  "files.autoSave": "afterDelay",
+  "files.autoSaveDelay": 1000,
+  "extensions": ["ext1", "ext2", "ext3", "ext4"]
+}

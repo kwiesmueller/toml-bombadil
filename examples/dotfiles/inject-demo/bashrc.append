@@ -1,0 +1,14 @@
+# Appended by bombadil inject strategy
+# This content appears AFTER original bashrc content
+
+# Custom aliases
+alias dotfiles="cd ~/dotfiles"
+alias reload="source ~/.bashrc"
+
+# Editor setup from variables
+export EDITOR="{{ editor }}"
+export VISUAL="{{ editor }}"
+
+# Theme colors available as env vars
+export THEME_BG="{{ background }}"
+export THEME_FG="{{ foreground }}"

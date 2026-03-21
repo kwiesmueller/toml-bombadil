@@ -1,0 +1,23 @@
+# Semantic patch for JSON files
+# Format-aware merging that survives whitespace/formatting changes
+
+[patch]
+format = "json"
+
+# Merge these values into the JSON (deep merge for objects)
+[patch.merge]
+"editor.fontSize" = 14
+"editor.fontFamily" = "JetBrains Mono"
+"editor.tabSize" = 2
+"workbench.colorTheme" = "Tokyo Night"
+"files.autoSave" = "afterDelay"
+"files.autoSaveDelay" = 1000
+
+# Delete these keys from the JSON
+[patch.delete]
+keys = ["telemetry.enabled", "update.mode"]
+
+# Array operations
+[[patch.arrays.extensions]]
+operation = "append"
+value = ["ext3", "ext4"]

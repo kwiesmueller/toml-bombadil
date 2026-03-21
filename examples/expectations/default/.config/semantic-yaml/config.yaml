@@ -1,0 +1,21 @@
+server:
+  host: localhost
+  port: 9000
+  timeout: 60
+  ssl: true
+
+logging:
+  level: debug
+  format: json
+  file: /var/log/app.log
+
+database:
+  driver: postgres
+  host: localhost
+  port: 5432
+
+features:
+  - feature_a
+  - feature_b
+  - feature_c
+  - feature_d
