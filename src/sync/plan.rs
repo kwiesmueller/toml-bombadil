@@ -111,6 +111,10 @@ pub struct PlannedFile {
     /// `true` = regular file copy; `false` = symlink (default).
     pub copy: bool,
     pub action: DotAction,
+    /// Additional hard-copy destination created after the symlink.
+    pub hard_copy_target: Option<PathBuf>,
+    /// Unix permissions for the hard copy (octal).
+    pub hard_copy_permissions: Option<u32>,
 }
 
 /// Action to perform for a dot or file.
@@ -175,9 +179,12 @@ pub struct PlannedPackage {
     /// Resolved install name for the active package manager.
     /// Falls back to `name` when no manager-specific override is declared.
     pub install_name: String,
-    /// The package manager to use, e.g. `"dnf"`, `"apt"`, `"brew"`.
+    /// The package manager to use, e.g. `"dnf"`, `"apt"`, `"brew"`, `"go"`, `"binary"`.
     /// `None` when no compatible manager is available on this system.
     pub manager_name: Option<String>,
+    /// Absolute path to a repo file that must be installed before this package.
+    /// Only set for extended package manager configs with a `repo` field.
+    pub repo_file: Option<PathBuf>,
     pub action: PackageAction,
     pub prehooks: Vec<String>,
     pub posthooks: Vec<String>,
@@ -350,7 +357,7 @@ pub fn build_sync_plan(config_path: &Path, options: &SyncOptions) -> Result<Sync
         };
 
         // Plan packages for this dot
-        let packages = plan_packages_for_dot(dot_def, &active_tags);
+        let packages = plan_packages_for_dot(dot_def, &active_tags, &dotfiles_dir);
 
         let planned = PlannedDot {
             name: name.clone(),
@@ -405,6 +412,7 @@ pub fn build_sync_plan(config_path: &Path, options: &SyncOptions) -> Result<Sync
                     name: pkg.name.clone(),
                     install_name: pkg.install_name.clone(),
                     manager_name: pkg.manager_name.clone(),
+                    repo_file: pkg.repo_file.clone(),
                     action: pkg.action.clone(),
                     prehooks: pkg.prehooks.clone(),
                     posthooks: pkg.posthooks.clone(),
@@ -598,6 +606,10 @@ fn plan_files_for_dot(
         let target_str = target.target_path();
         let target_path = crate::config::resolve_path(std::path::Path::new(target_str));
         let is_copy = target.is_copy();
+        let hard_copy_target = target.hard_copy_target().map(|s| {
+            crate::config::resolve_path(std::path::Path::new(s))
+        });
+        let hard_copy_permissions = target.hard_copy_permissions();
 
         // Determine action based on target state
         let action = if !target_path.exists() {
@@ -622,6 +634,8 @@ fn plan_files_for_dot(
             target: target_path,
             copy: is_copy,
             action,
+            hard_copy_target,
+            hard_copy_permissions,
         });
     }
 
@@ -666,16 +680,24 @@ fn derive_dot_action(files: &[PlannedFile]) -> DotAction {
 ///
 /// Detects available package managers, resolves per-package install names,
 /// and checks whether each package is already installed.
+///
+/// Manager selection rules:
+/// - If the package has NO `install` section: any available manager is tried
+///   with the canonical key name.
+/// - If the package HAS an `install` section: only managers with an explicit
+///   entry are considered (no fallback to canonical name for unlisted managers).
 fn plan_packages_for_dot(
     dot_def: &DotDefinition,
     active_tags: &HashSet<String>,
+    dotfiles_dir: &Path,
 ) -> Vec<PlannedPackage> {
+    use crate::config::{CargoInstall, PkgManagerInstall};
     use crate::packages::managers::{
         apt::Apt, brew::Brew, cargo::Cargo, dnf::Dnf, flatpak::Flatpak, pacman::Pacman,
         PackageManager as PkgMgr,
     };
 
-    // Build ordered list of candidate managers. First available one wins.
+    // Build ordered list of candidate system+cargo managers.
     let candidates: Vec<(&str, Box<dyn PkgMgr>)> = vec![
         ("dnf", Box::new(Dnf)),
         ("apt", Box::new(Apt)),
@@ -685,80 +707,162 @@ fn plan_packages_for_dot(
         ("flatpak", Box::new(Flatpak)),
     ];
 
-    // Filter to managers actually present on this system.
     let available: Vec<(&str, &dyn PkgMgr)> = candidates
         .iter()
         .filter(|(_, m)| m.is_available())
         .map(|(name, m)| (*name, m.as_ref()))
         .collect();
 
+    // Check if `go` is available.
+    let go_available = std::process::Command::new("go")
+        .arg("version")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+
     dot_def
         .packages
         .iter()
         .filter(|(_, pkg)| {
-            // Package is included when:
-            //  - it has no tags (always-include), OR
-            //  - at least one of its tags is in the active tag set
             pkg.tags.is_empty() || pkg.tags.iter().any(|t| active_tags.contains(t))
         })
         .map(|(canonical, pkg)| {
-            // Find the first available manager that can handle this package.
-            let resolved = available.iter().find_map(|(mgr_name, mgr)| {
-                let install_name = resolve_install_name(canonical, pkg, mgr_name);
-                Some((*mgr_name, install_name, *mgr))
-            });
+            // --- Try trait-based managers (dnf / apt / brew / pacman / cargo / flatpak) ---
+            let resolved_mgr: Option<(&str, String, &dyn PkgMgr, Option<PathBuf>)> =
+                available.iter().find_map(|(mgr_name, mgr)| {
+                    let (install_name, repo_file) = match &pkg.install {
+                        None => {
+                            // No install section → any manager may use the canonical name.
+                            (canonical.to_string(), None)
+                        }
+                        Some(install) => {
+                            // Has install section → only use manager if explicitly listed.
+                            let (name_opt, repo_opt): (Option<String>, Option<PathBuf>) =
+                                match *mgr_name {
+                                    "dnf" => {
+                                        let entry = install.dnf.as_ref()?;
+                                        let repo = entry
+                                            .repo_file()
+                                            .map(|r| dotfiles_dir.join(r));
+                                        (Some(entry.package_name().to_string()), repo)
+                                    }
+                                    "apt" => {
+                                        let entry = install.apt.as_ref()?;
+                                        let repo = entry
+                                            .repo_file()
+                                            .map(|r| dotfiles_dir.join(r));
+                                        (Some(entry.package_name().to_string()), repo)
+                                    }
+                                    "brew" => (
+                                        install.brew.as_ref().map(|e| {
+                                            // brew extended config — ignore repo (not applicable)
+                                            e.package_name().to_string()
+                                        }),
+                                        None,
+                                    ),
+                                    "pacman" => (
+                                        install.pacman.as_ref().map(|e| e.package_name().to_string()),
+                                        None,
+                                    ),
+                                    "cargo" => (
+                                        install.cargo.as_ref().map(|c| match c {
+                                            CargoInstall::Simple(s) => s.clone(),
+                                            CargoInstall::Full { name, .. } => name.clone(),
+                                        }),
+                                        None,
+                                    ),
+                                    "flatpak" => (install.flatpak.clone(), None),
+                                    _ => (None, None),
+                                };
+                            (name_opt?, repo_opt)
+                        }
+                    };
+                    Some((*mgr_name, install_name, *mgr, repo_file))
+                });
 
-            let action = if let Some((_, ref install_name, mgr)) = resolved {
-                match mgr.is_installed(install_name) {
+            // --- Try go ---
+            let resolved_go: Option<(String, String)> =
+                if resolved_mgr.is_none() && go_available {
+                    pkg.install
+                        .as_ref()
+                        .and_then(|i| i.go.clone())
+                        .map(|module| ("go".to_string(), module))
+                } else {
+                    None
+                };
+
+            // --- Try binary (always "available"; is_installed = target file exists) ---
+            let resolved_binary: Option<(String, String)> =
+                if resolved_mgr.is_none() && resolved_go.is_none() {
+                    pkg.install.as_ref().and_then(|i| i.binary.as_ref()).map(|b| {
+                        // Use install_dir or derive from asset_pattern as the is-installed marker.
+                        let install_name = b
+                            .install_dir
+                            .as_ref()
+                            .map(|p| p.to_string_lossy().to_string())
+                            .or_else(|| b.url.clone())
+                            .or_else(|| b.github.clone())
+                            .unwrap_or_else(|| canonical.to_string());
+                        ("binary".to_string(), install_name)
+                    })
+                } else {
+                    None
+                };
+
+            // --- Determine action ---
+            let (manager_name, install_name, repo_file, action) = if let Some((mgr_name, name, mgr, repo_file)) = resolved_mgr {
+                let action = match mgr.is_installed(&name) {
                     Ok(true) => PackageAction::AlreadyInstalled,
                     _ => PackageAction::Install,
-                }
+                };
+                (Some(mgr_name.to_string()), name, repo_file, action)
+            } else if let Some((mgr, name)) = resolved_go {
+                // For go packages: check if the binary derived from the module path exists.
+                let bin = name.split('/').last().unwrap_or(&name);
+                let bin = bin.split('@').next().unwrap_or(bin).to_string();
+                let is_installed = std::process::Command::new("which")
+                    .arg(&bin)
+                    .output()
+                    .map(|o| o.status.success())
+                    .unwrap_or(false);
+                let action = if is_installed {
+                    PackageAction::AlreadyInstalled
+                } else {
+                    PackageAction::Install
+                };
+                (Some(mgr), name, None, action)
+            } else if let Some((mgr, name)) = resolved_binary {
+                // For binary packages: check if the target path exists.
+                let is_installed = std::path::Path::new(&name).exists();
+                let action = if is_installed {
+                    PackageAction::AlreadyInstalled
+                } else {
+                    PackageAction::Install
+                };
+                (Some(mgr), name, None, action)
             } else {
-                PackageAction::Skip {
-                    reason: "no compatible package manager available on this system".to_string(),
-                }
-            };
-
-            let (install_name, manager_name) = match resolved {
-                Some((mgr_name, name, _)) => (name, Some(mgr_name.to_string())),
-                None => (canonical.clone(), None),
+                (
+                    None,
+                    canonical.clone(),
+                    None,
+                    PackageAction::Skip {
+                        reason: "no compatible package manager available on this system"
+                            .to_string(),
+                    },
+                )
             };
 
             PlannedPackage {
                 name: canonical.clone(),
                 install_name,
                 manager_name,
+                repo_file,
                 action,
                 prehooks: pkg.prehooks.clone(),
                 posthooks: pkg.posthooks.clone(),
             }
         })
         .collect()
-}
-
-/// Resolve the install name for a package on a specific manager.
-///
-/// Uses the manager-specific override if declared; otherwise falls back
-/// to the canonical package key name (registry stub — always returns key name).
-fn resolve_install_name(canonical: &str, pkg: &crate::config::DotPackage, manager: &str) -> String {
-    let Some(install) = &pkg.install else {
-        return canonical.to_string();
-    };
-
-    let override_name = match manager {
-        "dnf" => install.dnf.as_deref(),
-        "apt" => install.apt.as_deref(),
-        "brew" => install.brew.as_deref(),
-        "pacman" => install.pacman.as_deref(),
-        "flatpak" => install.flatpak.as_deref(),
-        "cargo" => install.cargo.as_ref().map(|c| match c {
-            crate::config::CargoInstall::Simple(s) => s.as_str(),
-            crate::config::CargoInstall::Full { name, .. } => name.as_str(),
-        }),
-        _ => None,
-    };
-
-    override_name.unwrap_or(canonical).to_string()
 }
 
 /// Collect global hooks from settings and active profile.

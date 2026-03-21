@@ -249,6 +249,20 @@ impl FileTarget {
             FileTarget::Extended(o) => o.copy,
         }
     }
+
+    pub fn hard_copy_target(&self) -> Option<&str> {
+        match self {
+            FileTarget::Simple(_) => None,
+            FileTarget::Extended(o) => o.hard_copy_target.as_deref(),
+        }
+    }
+
+    pub fn hard_copy_permissions(&self) -> Option<u32> {
+        match self {
+            FileTarget::Simple(_) => None,
+            FileTarget::Extended(o) => o.hard_copy_permissions,
+        }
+    }
 }
 
 /// Extended file target options.
@@ -264,6 +278,17 @@ pub struct FileTargetOptions {
     /// Copy as a regular file instead of symlinking.
     #[serde(default)]
     pub copy: bool,
+
+    /// Additional hard-copy destination (besides the symlink at `target`).
+    ///
+    /// Creates a real file at this path after symlinking. Useful when the
+    /// consuming program does not follow symlinks (e.g. SDDM session files).
+    #[serde(default)]
+    pub hard_copy_target: Option<String>,
+
+    /// Unix permissions for the hard copy in octal (e.g. `0o644`).
+    #[serde(default)]
+    pub hard_copy_permissions: Option<u32>,
 }
 
 /// A package declared inside a dots.toml.
@@ -327,24 +352,76 @@ fn default_true() -> bool {
     true
 }
 
+/// Installation method for a system package manager.
+///
+/// Either a simple package name string or an extended table with optional
+/// repository setup (repo file, URL, GPG key) that must be installed first.
+///
+/// ```toml
+/// # Simple
+/// dnf = "ripgrep"
+///
+/// # Extended — installs a repo file before the package
+/// dnf = { package = "kubectl", repo = "k8s/kubectl.repo" }
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(untagged)]
+pub enum PkgManagerInstall {
+    /// Simple package name.
+    Simple(String),
+    /// Extended configuration with optional repository setup.
+    Extended {
+        /// Package name to install.
+        package: String,
+        /// Repo file path relative to the dotfiles root to copy into place
+        /// before installing (e.g. `"k8s/kubectl.repo"` → `/etc/yum.repos.d/kubectl.repo`).
+        #[serde(default)]
+        repo: Option<String>,
+        /// Repository URL to add via the manager's repo command.
+        #[serde(default)]
+        repo_url: Option<String>,
+        /// GPG key URL to import before adding the repository.
+        #[serde(default)]
+        gpg_key: Option<String>,
+    },
+}
+
+impl PkgManagerInstall {
+    /// The package name to pass to the package manager install command.
+    pub fn package_name(&self) -> &str {
+        match self {
+            Self::Simple(s) => s.as_str(),
+            Self::Extended { package, .. } => package.as_str(),
+        }
+    }
+
+    /// Path (relative to dotfiles root) of a repo file to install before this package.
+    pub fn repo_file(&self) -> Option<&str> {
+        match self {
+            Self::Simple(_) => None,
+            Self::Extended { repo, .. } => repo.as_deref(),
+        }
+    }
+}
+
 /// Installation methods for different package managers.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct InstallMethods {
-    /// DNF package name (Fedora/RHEL).
+    /// DNF package (Fedora/RHEL) — simple name or extended with repo setup.
     #[serde(default)]
-    pub dnf: Option<String>,
+    pub dnf: Option<PkgManagerInstall>,
 
-    /// APT package name (Debian/Ubuntu).
+    /// APT package (Debian/Ubuntu) — simple name or extended with repo setup.
     #[serde(default)]
-    pub apt: Option<String>,
+    pub apt: Option<PkgManagerInstall>,
 
-    /// Homebrew package name (macOS/Linux).
+    /// Homebrew package (macOS/Linux) — simple name or extended with repo setup.
     #[serde(default)]
-    pub brew: Option<String>,
+    pub brew: Option<PkgManagerInstall>,
 
-    /// Pacman package name (Arch).
+    /// Pacman package (Arch) — simple name or extended with repo setup.
     #[serde(default)]
-    pub pacman: Option<String>,
+    pub pacman: Option<PkgManagerInstall>,
 
     /// Cargo crate name.
     #[serde(default)]
@@ -717,7 +794,10 @@ mod tests {
         let config: Config = toml::from_str(toml).unwrap();
         let pkg = config.settings.packages.get("ripgrep").unwrap();
         assert_eq!(pkg.tags, vec!["cli", "essential"]);
-        assert_eq!(pkg.install.dnf, Some("ripgrep".to_string()));
+        assert_eq!(
+            pkg.install.dnf.as_ref().map(|d| d.package_name()),
+            Some("ripgrep")
+        );
     }
 
     #[test]
@@ -777,7 +857,7 @@ mod tests {
         assert_eq!(dot_file.dot.prehooks, vec!["mkdir -p ~/.local/share/nvim"]);
         let nvim_pkg = &dot_file.dot.packages["neovim"];
         assert_eq!(
-            nvim_pkg.install.as_ref().unwrap().dnf.as_deref(),
+            nvim_pkg.install.as_ref().unwrap().dnf.as_ref().map(|d| d.package_name()),
             Some("neovim")
         );
         assert_eq!(nvim_pkg.posthooks.len(), 1);

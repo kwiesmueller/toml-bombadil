@@ -268,6 +268,27 @@ enum Cli {
         #[clap(long)]
         continue_on_error: bool,
     },
+    /// Migrate v3 bombadil.toml imports to v4 dots.toml format
+    ///
+    /// Reads bombadil.toml from <dotfiles-dir> and generates a dots.toml for
+    /// each imported config file. Files in <dotfiles-dir> are never modified.
+    /// Generated dots.toml files are written to <output-dir> (default: same
+    /// as <dotfiles-dir>) maintaining the same directory structure.
+    /// Existing dots.toml files in the output are never overwritten.
+    Migrate {
+        /// Path to the dotfiles directory containing bombadil.toml
+        #[clap(value_name = "DOTFILES_DIR")]
+        dotfiles_dir: PathBuf,
+
+        /// Directory to write generated dots.toml files into
+        /// (defaults to <dotfiles-dir>; files in <dotfiles-dir> are never modified)
+        #[clap(short, long)]
+        output: Option<PathBuf>,
+
+        /// Print what would be written without creating any files
+        #[clap(long)]
+        dry_run: bool,
+    },
 }
 
 #[derive(Debug, Clone, Copy, clap::ValueEnum)]
@@ -958,6 +979,13 @@ async fn main() -> Result<()> {
             } else {
                 println!("{} {}", "✗".red(), result.message);
                 std::process::exit(1);
+            }
+        }
+        Cli::Migrate { dotfiles_dir, output, dry_run } => {
+            let out_dir = output.unwrap_or_else(|| dotfiles_dir.clone());
+            match toml_bombadil::migrate::migrate(&dotfiles_dir, &out_dir, dry_run) {
+                Ok(report) => report.print(),
+                Err(e) => fatal!("migration failed: {}", e),
             }
         }
     };

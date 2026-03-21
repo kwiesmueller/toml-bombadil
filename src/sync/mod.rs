@@ -200,32 +200,122 @@ fn install_package(pkg: &PlannedPackage) {
         apt::Apt, brew::Brew, cargo::Cargo, dnf::Dnf, flatpak::Flatpak, pacman::Pacman,
         PackageManager as PkgMgr,
     };
-    use tracing::warn;
+    use tracing::{info, warn};
 
-    let mgr: Option<Box<dyn PkgMgr>> = match pkg.manager_name.as_deref() {
-        Some("dnf") => Some(Box::new(Dnf)),
-        Some("apt") => Some(Box::new(Apt)),
-        Some("brew") => Some(Box::new(Brew)),
-        Some("pacman") => Some(Box::new(Pacman)),
-        Some("cargo") => Some(Box::new(Cargo)),
-        Some("flatpak") => Some(Box::new(Flatpak)),
-        _ => None,
-    };
+    // Handle repo file installation first (for extended package manager configs).
+    if let Some(repo_file) = &pkg.repo_file {
+        install_repo_file(repo_file, pkg.manager_name.as_deref());
+    }
 
-    match mgr {
-        Some(m) => {
-            if let Err(e) = m.install(&pkg.install_name) {
-                warn!(
+    match pkg.manager_name.as_deref() {
+        Some("go") => {
+            info!(module = %pkg.install_name, "installing go package");
+            let status = std::process::Command::new("go")
+                .arg("install")
+                .arg(&pkg.install_name)
+                .status();
+            match status {
+                Ok(s) if s.success() => {}
+                Ok(s) => warn!(
                     name = %pkg.name,
-                    install_name = %pkg.install_name,
+                    module = %pkg.install_name,
+                    exit_code = ?s.code(),
+                    "go install failed"
+                ),
+                Err(e) => warn!(
+                    name = %pkg.name,
+                    module = %pkg.install_name,
                     error = %e,
-                    "package install failed"
-                );
+                    "failed to spawn go install"
+                ),
+            }
+        }
+        Some("binary") => {
+            warn!(
+                name = %pkg.name,
+                install_name = %pkg.install_name,
+                "binary download install not yet implemented — install manually"
+            );
+        }
+        Some(mgr_name) => {
+            let mgr: Option<Box<dyn PkgMgr>> = match mgr_name {
+                "dnf" => Some(Box::new(Dnf)),
+                "apt" => Some(Box::new(Apt)),
+                "brew" => Some(Box::new(Brew)),
+                "pacman" => Some(Box::new(Pacman)),
+                "cargo" => Some(Box::new(Cargo)),
+                "flatpak" => Some(Box::new(Flatpak)),
+                _ => None,
+            };
+            match mgr {
+                Some(m) => {
+                    if let Err(e) = m.install(&pkg.install_name) {
+                        warn!(
+                            name = %pkg.name,
+                            install_name = %pkg.install_name,
+                            error = %e,
+                            "package install failed"
+                        );
+                    }
+                }
+                None => {
+                    warn!(
+                        name = %pkg.name,
+                        manager = %mgr_name,
+                        "unknown package manager, skipping install"
+                    );
+                }
             }
         }
         None => {
             warn!(name = %pkg.name, "no package manager available, skipping install");
         }
+    }
+}
+
+/// Install a repository file before a package (for extended package manager configs).
+///
+/// Copies the repo file to the manager-appropriate system directory.
+/// Failures are logged as warnings — the package install will likely also fail,
+/// but we don't abort the entire run.
+fn install_repo_file(repo_file: &std::path::Path, manager: Option<&str>) {
+    use std::fs;
+    use tracing::{info, warn};
+
+    let dest_dir = match manager {
+        Some("dnf") | Some("rpm") => std::path::Path::new("/etc/yum.repos.d"),
+        Some("apt") => std::path::Path::new("/etc/apt/sources.list.d"),
+        _ => {
+            warn!(
+                repo_file = %repo_file.display(),
+                "cannot determine repo destination for manager {:?}",
+                manager
+            );
+            return;
+        }
+    };
+
+    if !repo_file.exists() {
+        warn!(repo_file = %repo_file.display(), "repo file not found, skipping");
+        return;
+    }
+
+    let filename = repo_file.file_name().unwrap_or_default();
+    let dest = dest_dir.join(filename);
+
+    info!(
+        src = %repo_file.display(),
+        dest = %dest.display(),
+        "installing repo file"
+    );
+
+    if let Err(e) = fs::copy(repo_file, &dest) {
+        warn!(
+            src = %repo_file.display(),
+            dest = %dest.display(),
+            error = %e,
+            "failed to install repo file (may need sudo)"
+        );
     }
 }
 
@@ -277,6 +367,7 @@ fn apply_file(file: &PlannedFile) -> Result<Vec<crate::audit::ActionType>> {
             }
             create_link_or_copy(file)?;
             actions.push(make_link_action(file));
+            apply_hard_copy(file, &mut actions)?;
         }
         DotAction::Update => {
             // Remove old symlink/file before relinking
@@ -288,10 +379,12 @@ fn apply_file(file: &PlannedFile) -> Result<Vec<crate::audit::ActionType>> {
             }
             create_link_or_copy(file)?;
             actions.push(make_link_action(file));
+            apply_hard_copy(file, &mut actions)?;
         }
         DotAction::Create => {
             create_link_or_copy(file)?;
             actions.push(make_link_action(file));
+            apply_hard_copy(file, &mut actions)?;
         }
         DotAction::Unchanged => {
             debug!(target = %file.target.display(), "unchanged, skipping");
@@ -300,6 +393,71 @@ fn apply_file(file: &PlannedFile) -> Result<Vec<crate::audit::ActionType>> {
     }
 
     Ok(actions)
+}
+
+/// Apply the optional hard copy declared in `file.hard_copy_target`.
+///
+/// Creates a real file at `hard_copy_target` by copying from `source`, then
+/// optionally applies `hard_copy_permissions`. Records a `FileCreate` action.
+fn apply_hard_copy(
+    file: &PlannedFile,
+    actions: &mut Vec<crate::audit::ActionType>,
+) -> Result<()> {
+    use crate::audit::ActionType;
+    use crate::core::BombadilError;
+    use std::fs;
+    use tracing::debug;
+
+    let Some(ref hct) = file.hard_copy_target else {
+        return Ok(());
+    };
+
+    if let Some(parent) = hct.parent() {
+        if !parent.exists() {
+            fs::create_dir_all(parent).map_err(|e| BombadilError::Io {
+                context: format!("failed to create directory {}", parent.display()),
+                source: e,
+            })?;
+        }
+    }
+
+    debug!(
+        source = %file.source.display(),
+        hard_copy = %hct.display(),
+        "creating hard copy"
+    );
+
+    fs::copy(&file.source, hct).map_err(|e| BombadilError::Io {
+        context: format!(
+            "failed to hard copy {} → {}",
+            file.source.display(),
+            hct.display()
+        ),
+        source: e,
+    })?;
+
+    if let Some(mode) = file.hard_copy_permissions {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(hct, std::fs::Permissions::from_mode(mode)).map_err(|e| {
+                BombadilError::Io {
+                    context: format!("failed to set permissions on {}", hct.display()),
+                    source: e,
+                }
+            })?;
+        }
+    }
+
+    let content = fs::read(&file.source).unwrap_or_default();
+    let hash = crate::audit::sha256_hash(&content);
+    actions.push(ActionType::FileCreate {
+        target: hct.clone(),
+        source: file.source.clone(),
+        content_hash: hash,
+    });
+
+    Ok(())
 }
 
 /// Build the audit `ActionType` for a completed link-or-copy operation.

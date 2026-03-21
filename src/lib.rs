@@ -49,6 +49,7 @@ pub mod validate;
 pub mod config;
 pub mod core;
 pub mod dots;
+pub mod migrate;
 pub mod sync;
 
 // Re-export drift detection from packages (v4)
