@@ -1,18 +1,42 @@
-# Bombadil v4 Implementation Progress
+# Bombadil Consolidation Progress
 
-## Status: Core Migration Complete - Cleanup Remaining
+## Status: Phase 1 — SyncEngine + new config schema in place
 
-Last updated: 2025-02-08
+Last updated: 2026-03-21
 
 ## Quick Resume
 
-**Test status**: 243 lib tests + 18 e2e tests pass, 0 warnings.
+**Test status**: 254 lib tests + 18 e2e tests + 1 doc-test pass, 0 errors.
 
-**To verify**: `cargo test --lib && cargo test --test e2e -- --test-threads=4`
+**To verify**: `cargo test`
 
 **To rebuild e2e binary**: `cargo build --release`
 
 **To explore interactively**: `bash examples/e2e/explore.sh --host-binary`
+
+## Current Phase
+
+**Phase 1 complete**:
+- `src/config/schema.rs`: Added `DotFile`, `FileTarget`, `DotPackage`, `DotProfileOverride` types
+  (new dots.toml file-map model). Updated `Profile` with `active_tags`. All 9 schema tests pass.
+- `src/config/mod.rs`: Added `discover_dot_files()` — recursive auto-discovery of `dots.toml` files.
+  Skips hidden dirs and `.dots`. All 25 config tests pass.
+- `src/sync/` (new module):
+  - `plan.rs`: `SyncOptions`, `SyncPlan`, `SyncItem`, `PlannedDot`, `PlannedFile`, `PlannedPackage`,
+    `PlannedHook`, `DotAction`, `SkipReason`. `build_sync_plan()` with topological sort, tag
+    filtering, dependency skip propagation. 4 plan tests pass.
+  - `mod.rs`: `SyncEngine`, `execute_plan()` (creates symlinks/copies per file, stubs for hooks
+    and packages).
+- CLI: Added `bombadil bombadil-sync` command (temporary name to avoid collision with old `Sync`)
+  wired to `SyncEngine`.
+
+**Next phases**:
+- Phase 2: Integrate audit recording into `execute_plan()`, add per-item hook execution
+- Phase 3: Integrate `PackageManager` into `execute_plan()` (replace stubs)
+- Phase 4: Delete v3 modules (`src/settings/`, `src/paths/`, `src/templating.rs`, `src/error.rs`,
+  bulk of `src/lib.rs`). Rename `BombadilSync` → `Sync` in CLI.
+- Phase 5: E2E tests for all CUJs (see `docs/plan.md`)
+- Phase 6: Code quality pass
 
 ## Decision Log
 

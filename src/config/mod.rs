@@ -190,6 +190,82 @@ pub fn resolve_dotfiles_dir(config: &Config, config_path: &Path) -> PathBuf {
     }
 }
 
+/// Discover all `dots.toml` files under `dotfiles_dir`.
+///
+/// Returns `(dir_path, dot_file)` pairs where `dir_path` is the directory
+/// containing the `dots.toml`, relative to `dotfiles_dir`.
+///
+/// Discovery rules:
+/// - Recursively walk the dotfiles directory.
+/// - Any directory containing a `dots.toml` is a managed dot.
+/// - A directory is excluded from a parent's file traversal if it has its
+///   own `dots.toml` (each `dots.toml` manages only its own directory).
+/// - The dotfiles root itself (containing `bombadil.toml`) is excluded
+///   unless it also contains a `dots.toml` at the root level.
+#[instrument(skip(dotfiles_dir))]
+pub fn discover_dot_files(dotfiles_dir: &Path) -> Vec<(PathBuf, DotFile)> {
+    let mut results = Vec::new();
+    discover_dot_files_recursive(dotfiles_dir, dotfiles_dir, &mut results);
+    results
+}
+
+fn discover_dot_files_recursive(
+    dotfiles_dir: &Path,
+    dir: &Path,
+    results: &mut Vec<(PathBuf, DotFile)>,
+) {
+    let dots_toml = dir.join("dots.toml");
+    let has_dots_toml = dots_toml.exists();
+
+    if has_dots_toml {
+        match std::fs::read_to_string(&dots_toml) {
+            Ok(content) => match toml::from_str::<DotFile>(&content) {
+                Ok(dot_file) => {
+                    let rel = dir
+                        .strip_prefix(dotfiles_dir)
+                        .unwrap_or(dir)
+                        .to_path_buf();
+                    debug!(path = %rel.display(), name = ?dot_file.dot.name, "discovered dots.toml");
+                    results.push((rel, dot_file));
+                }
+                Err(e) => {
+                    warn!(path = %dots_toml.display(), error = %e, "failed to parse dots.toml, skipping");
+                }
+            },
+            Err(e) => {
+                warn!(path = %dots_toml.display(), error = %e, "failed to read dots.toml, skipping");
+            }
+        }
+    }
+
+    // Recurse into subdirectories regardless of whether this dir has a dots.toml.
+    // Each subdirectory with its own dots.toml manages itself independently.
+    let read_dir = match std::fs::read_dir(dir) {
+        Ok(rd) => rd,
+        Err(e) => {
+            warn!(path = %dir.display(), error = %e, "failed to read directory");
+            return;
+        }
+    };
+
+    let mut entries: Vec<_> = read_dir.filter_map(|e| e.ok()).collect();
+    // Sort for deterministic ordering
+    entries.sort_by_key(|e| e.file_name());
+
+    for entry in entries {
+        let path = entry.path();
+        if path.is_dir() {
+            // Skip hidden directories and the .dots directory
+            let name = entry.file_name();
+            let name_str = name.to_string_lossy();
+            if name_str.starts_with('.') {
+                continue;
+            }
+            discover_dot_files_recursive(dotfiles_dir, &path, results);
+        }
+    }
+}
+
 /// Get the path to the bombadil config file in XDG config dir.
 pub fn config_path() -> Result<PathBuf> {
     dirs::config_dir()
@@ -379,5 +455,88 @@ mod tests {
         let config_path = Path::new("/home/user/dotfiles/bombadil.toml");
         let resolved = resolve_dotfiles_dir(&config, config_path);
         assert_eq!(resolved, PathBuf::from("/home/user/dotfiles"));
+    }
+
+    #[test]
+    fn discover_dot_files_finds_nested_dots_toml() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+
+        // terminal/zsh/dots.toml
+        fs::create_dir_all(root.join("terminal/zsh")).unwrap();
+        fs::write(
+            root.join("terminal/zsh/dots.toml"),
+            r#"[dot]
+name = "zsh"
+
+[dot.files]
+"zshrc" = "~/.zshrc"
+"#,
+        )
+        .unwrap();
+
+        // terminal/zsh/plugins/dots.toml
+        fs::create_dir_all(root.join("terminal/zsh/plugins")).unwrap();
+        fs::write(
+            root.join("terminal/zsh/plugins/dots.toml"),
+            r#"[dot]
+name = "zsh-plugins"
+depends_on = ["zsh"]
+
+[dot.files]
+"plugins.zsh" = "~/.config/zsh/plugins.zsh"
+"#,
+        )
+        .unwrap();
+
+        // editor/nvim/dots.toml
+        fs::create_dir_all(root.join("editor/nvim")).unwrap();
+        fs::write(
+            root.join("editor/nvim/dots.toml"),
+            r#"[dot]
+name = "nvim"
+
+[dot.files]
+"init.lua" = "~/.config/nvim/init.lua"
+"#,
+        )
+        .unwrap();
+
+        let dots = discover_dot_files(root);
+        assert_eq!(dots.len(), 3);
+
+        let names: Vec<_> = dots
+            .iter()
+            .filter_map(|(_, df)| df.dot.name.as_deref())
+            .collect();
+        assert!(names.contains(&"zsh"), "expected zsh in {:?}", names);
+        assert!(names.contains(&"zsh-plugins"), "expected zsh-plugins");
+        assert!(names.contains(&"nvim"), "expected nvim");
+    }
+
+    #[test]
+    fn discover_dot_files_skips_hidden_dirs() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+
+        // .hidden/dots.toml — should be skipped
+        fs::create_dir_all(root.join(".hidden")).unwrap();
+        fs::write(
+            root.join(".hidden/dots.toml"),
+            "[dot]\nname = \"hidden\"\n",
+        )
+        .unwrap();
+
+        // visible/dots.toml — should be found
+        fs::create_dir_all(root.join("visible")).unwrap();
+        fs::write(
+            root.join("visible/dots.toml"),
+            "[dot]\nname = \"visible\"\n",
+        )
+        .unwrap();
+
+        let dots = discover_dot_files(root);
+        assert_eq!(dots.len(), 1);
+        assert_eq!(dots[0].1.dot.name.as_deref(), Some("visible"));
     }
 }

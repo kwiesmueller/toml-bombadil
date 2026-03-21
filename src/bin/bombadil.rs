@@ -152,6 +152,31 @@ enum Cli {
         #[clap(short, long)]
         path: Option<PathBuf>,
     },
+    /// Apply full desired state: dotfiles + packages (new sync engine)
+    ///
+    /// Replaces `link` and `packages sync`. Reads the active profile from
+    /// `.active_profile` in the dotfiles directory (written by `bombadil init`).
+    BombadilSync {
+        /// Show plan without executing
+        #[clap(long)]
+        dry_run: bool,
+
+        /// Override active tags (comma-separated; supplement profile tags)
+        #[clap(short, long, value_delimiter = ',')]
+        tags: Vec<String>,
+
+        /// Skip package operations
+        #[clap(long)]
+        only_dots: bool,
+
+        /// Skip dot operations
+        #[clap(long)]
+        only_packages: bool,
+
+        /// Remove packages installed but not in config
+        #[clap(long)]
+        prune_packages: bool,
+    },
     /// Manage software packages
     Packages {
         #[clap(subcommand)]
@@ -413,6 +438,72 @@ async fn main() -> Result<()> {
 
             // Display session summary
             toml_bombadil::audit::print_session_summary(&session);
+        }
+        Cli::BombadilSync {
+            dry_run,
+            tags,
+            only_dots,
+            only_packages,
+            prune_packages,
+        } => {
+            use toml_bombadil::sync::{SyncEngine, SyncOptions};
+
+            let config_path = toml_bombadil::config::config_path()
+                .unwrap_or_else(|err| fatal!("{}", err));
+
+            // Read active profile from .active_profile file
+            let dotfiles_dir = {
+                let config = toml_bombadil::config::load_config_from(&config_path)
+                    .unwrap_or_else(|err| fatal!("{}", err));
+                toml_bombadil::config::resolve_dotfiles_dir(&config, &config_path)
+            };
+            let active_profile_file = dotfiles_dir.join(".active_profile");
+            let active_profile = if active_profile_file.exists() {
+                std::fs::read_to_string(&active_profile_file)
+                    .ok()
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+            } else {
+                None
+            };
+
+            let options = SyncOptions {
+                profile: active_profile,
+                dry_run,
+                extra_tags: tags,
+                only_dots,
+                only_packages,
+                prune_packages,
+            };
+
+            let engine = SyncEngine::new(&config_path);
+            let plan = engine.plan(&options).unwrap_or_else(|err| fatal!("{}", err));
+
+            if dry_run {
+                // Print plan summary
+                println!("Sync plan ({} items):", plan.items.len());
+                for item in &plan.items {
+                    match item {
+                        toml_bombadil::sync::SyncItem::Hook(h) => {
+                            let owner = h.owner.as_deref().unwrap_or("global");
+                            println!("  [{:?}] hook ({owner}): {}", h.phase, h.command);
+                        }
+                        toml_bombadil::sync::SyncItem::Dot(d) => {
+                            println!(
+                                "  {} //{}: {} files",
+                                d.action.indicator(),
+                                d.namespace,
+                                d.files.len()
+                            );
+                        }
+                        toml_bombadil::sync::SyncItem::Package(p) => {
+                            println!("  pkg: {}", p.name);
+                        }
+                    }
+                }
+            } else {
+                engine.execute(plan).unwrap_or_else(|err| fatal!("{}", err));
+            }
         }
         Cli::Watch { profiles } => {
             Bombadil::watch(profiles).await?;

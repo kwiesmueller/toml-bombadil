@@ -67,6 +67,7 @@ watchexec = "2"
 watchexec-filterer-ignore = "1"
 ignore-files = "1"
 tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread"] }
+indexmap = { version = "2.13.0", features = ["serde", "std"] }
 
 [features]
 default = ["cli"]

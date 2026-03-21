@@ -1,7 +1,14 @@
 //! Configuration schema types with JSON Schema derivation.
 //!
-//! These types define the structure of bombadil.toml and all related config files.
+//! These types define the structure of `bombadil.toml` and `dots.toml` files.
+//!
+//! # Two config surfaces
+//!
+//! - **`bombadil.toml`** → [`Config`]: root config; declares global settings, profiles, vars.
+//! - **`dots.toml`** → [`DotFile`]: per-dot config auto-discovered under the dotfiles root.
+//!   Contains file mappings, packages, hooks for one named logical unit.
 
+use indexmap::IndexMap;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -146,6 +153,160 @@ pub enum DotStrategy {
     Inject,
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// dots.toml types (new file-map model)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Top-level structure of a `dots.toml` file.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct DotFile {
+    pub dot: DotDefinition,
+}
+
+/// A named dot: a logical grouping of file mappings, packages, and hooks.
+///
+/// One `dots.toml` = one named dot. The dot's `name` is the stable identifier
+/// used in `depends_on` references across the dotfiles tree.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct DotDefinition {
+    /// Stable logical name (defaults to directory name). Used in `depends_on`.
+    #[serde(default)]
+    pub name: Option<String>,
+
+    /// File mappings: source (relative to dots.toml dir) → target path.
+    /// Target may use `~/` for home expansion.
+    #[serde(default)]
+    #[schemars(with = "HashMap<String, FileTarget>")]
+    pub files: IndexMap<String, FileTarget>,
+
+    /// Var files for Tera template substitution (relative to dots.toml dir).
+    #[serde(default)]
+    pub vars: Vec<PathBuf>,
+
+    /// Packages installed before this dot's files are applied.
+    #[serde(default)]
+    #[schemars(with = "HashMap<String, DotPackage>")]
+    pub packages: IndexMap<String, DotPackage>,
+
+    /// Dot names that must be fully applied before this one.
+    #[serde(default)]
+    pub depends_on: Vec<String>,
+
+    /// Tags for conditional inclusion. Empty = always included.
+    /// Dot is included only if at least one tag is in the active tag set.
+    #[serde(default)]
+    pub tags: Vec<String>,
+
+    /// Commands run before this dot is applied (packages and files).
+    #[serde(default)]
+    pub prehooks: Vec<String>,
+
+    /// Commands run after this dot is fully applied.
+    #[serde(default)]
+    pub posthooks: Vec<String>,
+
+    /// Per-profile overrides (vars, additional files, tags).
+    #[serde(default)]
+    #[schemars(with = "HashMap<String, DotProfileOverride>")]
+    pub profiles: IndexMap<String, DotProfileOverride>,
+}
+
+/// File target: either a plain path string or extended options table.
+///
+/// `#[serde(untagged)]` works here because TOML distinguishes string and
+/// inline-table values at the type level.
+///
+/// Examples:
+/// ```toml
+/// "zshrc"    = "~/.zshrc"                          # Simple
+/// "config/"  = { target = "~/.config/zsh/", ignore = ["*.bak"] }  # Extended
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(untagged)]
+pub enum FileTarget {
+    Simple(String),
+    Extended(FileTargetOptions),
+}
+
+impl FileTarget {
+    pub fn target_path(&self) -> &str {
+        match self {
+            FileTarget::Simple(s) => s.as_str(),
+            FileTarget::Extended(o) => o.target.as_str(),
+        }
+    }
+
+    pub fn ignore_patterns(&self) -> &[String] {
+        match self {
+            FileTarget::Simple(_) => &[],
+            FileTarget::Extended(o) => &o.ignore,
+        }
+    }
+
+    pub fn is_copy(&self) -> bool {
+        match self {
+            FileTarget::Simple(_) => false,
+            FileTarget::Extended(o) => o.copy,
+        }
+    }
+}
+
+/// Extended file target options.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct FileTargetOptions {
+    /// Target path (supports `~/` expansion).
+    pub target: String,
+
+    /// Glob patterns to exclude from directory copies.
+    #[serde(default)]
+    pub ignore: Vec<String>,
+
+    /// Copy as a regular file instead of symlinking.
+    #[serde(default)]
+    pub copy: bool,
+}
+
+/// A package declared inside a dots.toml.
+///
+/// The map key is the canonical cross-platform name. Manager-specific
+/// overrides are optional; when absent the key name is used as the package
+/// name for the active manager.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+pub struct DotPackage {
+    /// Manager-specific install names. Optional — key name is the fallback.
+    #[serde(default)]
+    pub install: Option<InstallMethods>,
+
+    /// Tags for conditional inclusion.
+    #[serde(default)]
+    pub tags: Vec<String>,
+
+    #[serde(default)]
+    pub prehooks: Vec<String>,
+
+    #[serde(default)]
+    pub posthooks: Vec<String>,
+}
+
+/// Profile-level overrides within a dots.toml.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+pub struct DotProfileOverride {
+    /// Additional or replacement var files for this profile.
+    #[serde(default)]
+    pub vars: Vec<PathBuf>,
+
+    /// Additional or replacement file mappings for this profile.
+    #[serde(default)]
+    #[schemars(with = "HashMap<String, FileTarget>")]
+    pub files: IndexMap<String, FileTarget>,
+
+    #[serde(default)]
+    pub prehooks: Vec<String>,
+
+    #[serde(default)]
+    pub posthooks: Vec<String>,
+}
+
 /// Package definition with multi-manager support.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct Package {
@@ -280,17 +441,33 @@ pub struct GitInstall {
 }
 
 /// Profile for environment-specific configuration.
+///
+/// Profiles are the primary mechanism for machine/environment differences.
+/// One profile per device is committed to the repo; the active profile is
+/// stored in `.active_profile` (gitignored) written by `bombadil init`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct Profile {
-    /// Profiles this profile inherits from.
+    /// Profiles this profile inherits from (last-wins merge on vars + active_tags + hooks).
     #[serde(default)]
     pub inherits: Vec<String>,
 
-    /// Extra profiles to enable (legacy, prefer `inherits`).
+    /// Extra profiles to enable (legacy alias for `inherits`).
     #[serde(default)]
     pub extra_profiles: Vec<String>,
 
-    /// Dotfile overrides for this profile.
+    /// Tags explicitly active for this profile.
+    ///
+    /// These supplement auto-detected platform tags (os, distro, desktop env).
+    /// Useful when setting up a fresh system where the desktop env is not yet
+    /// installed and thus not auto-detectable.
+    #[serde(default)]
+    pub active_tags: Vec<String>,
+
+    /// Tags for which to exclude packages/dots even if auto-detected.
+    #[serde(default)]
+    pub package_exclude_tags: Vec<String>,
+
+    /// Dotfile overrides for this profile (legacy bombadil.toml style).
     #[serde(default)]
     pub dots: HashMap<String, DotOverride>,
 
@@ -310,13 +487,9 @@ pub struct Profile {
     #[serde(default)]
     pub run_hooks_in_dotfiles_dir: bool,
 
-    /// Package tags to enable for this profile.
+    /// Package tags to enable for this profile (legacy, prefer `active_tags`).
     #[serde(default)]
     pub package_tags: Vec<String>,
-
-    /// Package tags to disable for this profile.
-    #[serde(default)]
-    pub package_exclude_tags: Vec<String>,
 }
 
 /// Dotfile override in a profile.
@@ -471,9 +644,14 @@ pub enum ArrayOpType {
 // Schema Generation
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Generate JSON Schema for the configuration.
+/// Generate JSON Schema for the root configuration (bombadil.toml).
 pub fn generate_schema() -> schemars::schema::RootSchema {
     schemars::schema_for!(Config)
+}
+
+/// Generate JSON Schema for a dots.toml file.
+pub fn generate_dot_file_schema() -> schemars::schema::RootSchema {
+    schemars::schema_for!(DotFile)
 }
 
 /// Generate JSON Schema for line patches.
@@ -540,5 +718,99 @@ mod tests {
         let pkg = config.settings.packages.get("ripgrep").unwrap();
         assert_eq!(pkg.tags, vec!["cli", "essential"]);
         assert_eq!(pkg.install.dnf, Some("ripgrep".to_string()));
+    }
+
+    #[test]
+    fn parse_dot_file_simple_files() {
+        let toml = r#"
+            [dot]
+            name = "zsh"
+
+            [dot.files]
+            "zshrc"  = "~/.zshrc"
+            "zshenv" = "~/.zshenv"
+        "#;
+
+        let dot_file: DotFile = toml::from_str(toml).unwrap();
+        assert_eq!(dot_file.dot.name.as_deref(), Some("zsh"));
+        assert_eq!(dot_file.dot.files.len(), 2);
+        assert_eq!(
+            dot_file.dot.files["zshrc"].target_path(),
+            "~/.zshrc"
+        );
+    }
+
+    #[test]
+    fn parse_dot_file_extended_target() {
+        let toml = r#"
+            [dot]
+            name = "kitty"
+
+            [dot.files]
+            "kitty.conf" = "~/.config/kitty/kitty.conf"
+            "themes/" = { target = "~/.config/kitty/themes/", ignore = ["*.bak"] }
+        "#;
+
+        let dot_file: DotFile = toml::from_str(toml).unwrap();
+        let themes = &dot_file.dot.files["themes/"];
+        assert_eq!(themes.target_path(), "~/.config/kitty/themes/");
+        assert_eq!(themes.ignore_patterns(), &["*.bak"]);
+    }
+
+    #[test]
+    fn parse_dot_file_with_packages() {
+        let toml = r#"
+            [dot]
+            name = "nvim"
+            prehooks = ["mkdir -p ~/.local/share/nvim"]
+
+            [dot.files]
+            "init.lua" = "~/.config/nvim/init.lua"
+
+            [dot.packages.neovim]
+            install.dnf  = "neovim"
+            install.brew = "neovim"
+            posthooks = ["nvim --headless '+checkhealth' +qa"]
+        "#;
+
+        let dot_file: DotFile = toml::from_str(toml).unwrap();
+        assert_eq!(dot_file.dot.prehooks, vec!["mkdir -p ~/.local/share/nvim"]);
+        let nvim_pkg = &dot_file.dot.packages["neovim"];
+        assert_eq!(
+            nvim_pkg.install.as_ref().unwrap().dnf.as_deref(),
+            Some("neovim")
+        );
+        assert_eq!(nvim_pkg.posthooks.len(), 1);
+    }
+
+    #[test]
+    fn parse_dot_file_with_profile_override() {
+        let toml = r#"
+            [dot]
+            name = "kitty"
+
+            [dot.files]
+            "kitty.conf" = "~/.config/kitty/kitty.conf"
+
+            [dot.profiles.work]
+            vars = ["profiles/work.toml"]
+        "#;
+
+        let dot_file: DotFile = toml::from_str(toml).unwrap();
+        let work = &dot_file.dot.profiles["work"];
+        assert_eq!(work.vars.len(), 1);
+    }
+
+    #[test]
+    fn parse_profile_active_tags() {
+        let toml = r#"
+            [profiles.fedora-kde]
+            active_tags = ["gui", "kde", "wayland", "fedora"]
+            vars = ["systems/fedora.toml"]
+        "#;
+
+        let config: Config = toml::from_str(toml).unwrap();
+        let profile = &config.profiles["fedora-kde"];
+        assert_eq!(profile.active_tags, vec!["gui", "kde", "wayland", "fedora"]);
     }
 }
