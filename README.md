@@ -7,120 +7,135 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/oknozor/toml-bombadil/actions"
-    ><img
-      src="https://github.com/oknozor/toml-bombadil/workflows/CI/badge.svg?branch=main"
-      alt="GitHub Actions workflow status"
-  /></a>
-  <a href="https://codecov.io/gh/oknozor/toml-bombadil"
-    ><img
-      src="https://codecov.io/gh/oknozor/toml-bombadil/branch/main/graph/badge.svg"
-      alt="Code coverage status"
-  /></a>
-    <a href="https://repology.org/project/bombadil/versions">
-        <img src="https://repology.org/badge/version-for-repo/aur/bombadil.svg" alt="AUR package">
+  <a href="https://crates.io/crates/toml-bombadil">
+    <img src="https://img.shields.io/crates/v/toml-bombadil.svg" alt="crates.io">
   </a>
-  <br />
-    <a href="https://crates.io/crates/toml-bombadil">
-        <img src="https://img.shields.io/crates/v/toml-bombadil.svg" alt="crates">
+  <a href="https://github.com/kwiesmueller/toml-bombadil/blob/main/LICENSE">
+    <img src="https://img.shields.io/github/license/kwiesmueller/toml-bombadil" alt="License">
   </a>
-  <a href="https://conventionalcommits.org"
-    ><img
-      src="https://img.shields.io/badge/Conventional%20Commits-1.0.0-yellow.svg"
-      alt="Conventional commits"
-  /></a>
-  <a href="https://github.com/oknozor/toml-bombadil/blob/main/LICENSE"
-    ><img
-      src="https://img.shields.io/github/license/oknozor/toml-bombadil"
-      alt="Repository license"
-  /></a>
-</p>
-
-<p align="center">
-  <a href="https://oknozor.github.io/toml-bombadil">Documentation</a>
-  ·
-  <a href="https://oknozor.github.io/toml-bombadil/docs/getting-started/quick-start/">Installation</a>
-  ·
-  <a href="https://docs.cocogitto.io/config">Configuration</a>
 </p>
 
 <h1></h1>
 
-**A dotfile manager written in Rust**
+> **v4 alpha** — this is a major rewrite of the original [oknozor/toml-bombadil](https://github.com/oknozor/toml-bombadil). The config format has changed. See [Migration from v3](#migration-from-v3) below.
 
-- **Dotfile template:** define your dotfiles templates and link them as needed.
-- **Dotfile profiles:** create profiles for different machines and situations and combine them on the flow.
-- **Installation hooks:** run custom commands before and after installing your dotfiles.
-- **Gpg encryption:** add encrypted secrets to your dotfile configuration with gpg.
+**Bombadil** is a dotfile manager written in Rust. It symlinks your dotfiles, injects template variables, manages system packages across package managers, and keeps a full audit trail of every change it makes.
 
-<p align="center">
-<a href="https://oknozor.github.io/toml-bombadil/docs/"><strong>Explore Toml Bombadil's docs&nbsp;&nbsp;▶</strong></a>
-</p>
+## Why bombadil?
 
+Maintaining dotfiles across multiple machines and environments is messy. Bombadil solves this by keeping your dotfiles as templates and generating the actual configs at link time — injecting per-machine variables, applying patches to system-owned base files, or appending your customizations into existing files without overwriting them.
 
-![example gif](asset/toml-bombadil.gif)
-
-##  Why another dotfile manager ?
-
-I wrote Toml Bombadil because I kept changing my desktop environment:
-switching from i3 to sway, from sway to xfce, from xfce to gnome and back to sway.
-When you keep changing your working environment like this you end up with several problems:
-- Some symlinks will end up orphans.
-- Not every program you use support Xresources and you will most probably have to manually edit some themes/config.
-- When starting a fresh installation you will very likely need to adapt your existing dotfiles to your new machine.
-- It is a mess.
-
-Toml Bombadil try to solve this with a simple addition to the symlink method used by other tools: instead of creating
-a symlink from a dotfile to the actual config path of a program, it will create a copy of it and symlink the copy.
-This additional step allow to use your original dotfile as a template and inject variables in the copy.
-You can have multiple value files in the same dotfile repository and change color scheme, or any value on the fly.
-
-In addition, this is completely optional, you could start using Toml Bombadil only to generate symlinks and templatize
-your dot file progressively.
+In v4 this extends to packages: each dotfile directory carries its own `dots.toml` declaring which packages are needed, how to install them on each package manager, and which tags gate their inclusion. A single `bombadil sync` applies dotfiles and packages together, records every operation, and can revert any of them individually.
 
 ## Installation
 
-**Arch Linux:**
-```bash
-pacman -S toml-bombadil
-```
-
-**Cargo:**
 ```bash
 cargo install toml-bombadil
 ```
 
-## Quickstart
+> AUR and other distribution packages track the upstream v3 release. Install via cargo for v4.
 
-See [Docs -> Quickstart](https://oknozor.github.io/toml-bombadil/docs/getting-started/quick-start/).
+## Quick start (v4)
+
+**1. Create a `dots.toml` in your dotfiles directory:**
+
+```toml
+[dot]
+name = "zsh"
+
+[dot.files]
+"zshrc"  = "~/.zshrc"
+"zshenv" = "~/.zshenv"
+# Extended form with ignore patterns:
+"config/" = { target = "~/.config/zsh/", ignore = ["*.bak"] }
+
+[dot.packages.ripgrep]
+[dot.packages.ripgrep.install]
+dnf    = "ripgrep"
+apt    = "ripgrep"
+brew   = "ripgrep"
+cargo  = "ripgrep"
+
+[dot.profiles.work]
+vars = ["profiles/work.toml"]
+```
+
+**2. Register your dotfiles directory and sync:**
+
+```bash
+bombadil install ~/dotfiles
+bombadil sync
+```
+
+`sync` applies all `dots.toml` files found under your dotfiles directory: it installs packages first, then symlinks files.
+
+## Config format overview
+
+Bombadil v4 uses two config files:
+
+- **`bombadil.toml`** (root, in `~/.config/`) — global settings, profiles, GPG key.
+- **`dots.toml`** (one per dotfile subdirectory) — file mappings, packages, hooks for that logical unit.
+
+### File mapping strategies
+
+| Strategy | Use case |
+|---|---|
+| `full` (default) | Symlink file or directory to target |
+| `patch` | Apply line-based patches against a base file (e.g. `/etc/sway/config`) |
+| `semantic_patch` | Deep-merge JSON / YAML / TOML / INI files |
+| `inject` | Append or prepend to existing files with idempotent markers |
+
+Variable injection uses [Tera](https://keats.github.io/tera/) templates. Source files can reference `{{ var_name }}` and var files supply the values.
+
+## Command reference
+
+| Command | Description |
+|---|---|
+| `bombadil install [path]` | Register a dotfiles directory |
+| `bombadil sync` | Apply dotfiles + packages (v4 unified command) |
+| `bombadil link` | Symlink dotfiles only (v3-compatible) |
+| `bombadil unlink` | Remove all managed symlinks |
+| `bombadil migrate <dir>` | Convert v3 `bombadil.toml` imports to v4 `dots.toml` files |
+| `bombadil packages install` | Install configured packages |
+| `bombadil packages list` | List configured packages and their status |
+| `bombadil drift` | Show packages installed but not in config |
+| `bombadil log` | Show audit history of past sessions |
+| `bombadil inspect <id>` | Inspect a specific action (details, diff, content) |
+| `bombadil revert <id>` | Revert a specific action |
+| `bombadil get <resource>` | Query configured dots, hooks, vars, profiles, secrets, platform |
+| `bombadil validate` | Scan for potential unencrypted secrets |
+| `bombadil add-secret` | Add a GPG-encrypted secret variable |
+| `bombadil watch` | Watch dotfiles and re-link on changes |
+| `bombadil schema` | Generate JSON Schema for editor validation |
+| `bombadil generate-completions <shell>` | Generate shell completions (bash, zsh, fish, elvish) |
+
+## Migration from v3
+
+Run `bombadil migrate` to convert a v3 `bombadil.toml` (with `import` entries) into per-directory `dots.toml` files:
+
+```bash
+bombadil migrate ~/dotfiles
+# Preview without writing:
+bombadil migrate ~/dotfiles --dry-run
+# Write output to a separate directory:
+bombadil migrate ~/dotfiles --output ~/dotfiles-v4
+```
+
+The migrator reads each imported config file, converts its `[settings.dots.*]` entries into the v4 `[dot.files]` format, and writes a `dots.toml` next to the imported file. Existing `dots.toml` files are never overwritten.
+
+After migrating, update `~/.config/bombadil.toml` to drop the `import` list (the engine now discovers `dots.toml` files automatically) and run `bombadil sync`.
 
 ## Shell completions
 
-Command line completion scripts for several popular shells can be generated by running `bombadil generate-completions`. An example for generating a completion script and outputting it to a file for zsh would be `bombadil generate-completions zsh > <somewhere on your $fpath>/_bombadil`. Available shells are: bash, elvish, fish, and zsh.
-
-## Troubleshooting
-
-If you get lost you can use `bombadil get {resource_name}` to see what is currently configured.
-Available resources are `dots`, `hooks`, `path`, `profiles`, `vars`, `secrets`.
-
-Optionally you can display resources for a profile with the `--profiles` flag.
-
-## Example repositories
-
-If you use Bombadil please submit an issue, or a PR to update this section, we will be happy to reference your dotfiles here!
-
-- [https://github.com/oknozor/dotfiles](https://github.com/oknozor/dotfiles)
-- [https://github.com/mrkajetanp/dotfiles](https://github.com/mrkajetanp/dotfiles)
-- [https://github.com/HaoZeke/Dotfiles](https://github.com/HaoZeke/Dotfiles/tree/bombadil)
+```bash
+bombadil generate-completions zsh > ~/.zfunc/_bombadil
+bombadil generate-completions bash > /etc/bash_completion.d/bombadil
+```
 
 ## Contributing
 
-Found a bug, have a suggestion for a new feature?
-Please read the [contribution guideline](CONTRIBUTING.md) and submit an [issue](https://github.com/oknozor/toml-bombadil/issues).
+Found a bug or want to propose a feature? Open an [issue](https://github.com/kwiesmueller/toml-bombadil/issues) or submit a pull request.
 
 ## License
 
-All the code in this repository is released under the MIT License, for more information take a look at the [LICENSE](LICENSE) file.
-
-
-
+MIT — see [LICENSE](LICENSE).
