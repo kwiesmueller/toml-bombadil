@@ -1,0 +1,22 @@
+# v3-style bombadil.toml for migration testing
+dotfiles_dir = "dotfiles"
+
+import = [
+    "zsh/zsh.toml",
+    "nvim/nvim.toml",
+    "pkgs/cli.toml",
+]
+
+[settings]
+vars = ["vars/base.toml"]
+prehooks = ["echo 'pre-link'"]
+
+[settings.dots.gitconfig]
+source = "git/gitconfig"
+target = ".gitconfig"
+
+[profiles.work]
+vars = ["vars/work.toml"]
+
+[profiles.work.dots]
+gitconfig.source = "git/gitconfig-work"

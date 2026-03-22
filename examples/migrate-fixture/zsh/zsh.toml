@@ -1,0 +1,17 @@
+# v3 import: zsh dotfile settings
+[settings]
+vars = ["vars/zsh.toml"]
+prehooks = ["mkdir -p ~/.config/zsh"]
+
+[settings.dots.zshrc]
+source = "zshrc"
+target = ".zshrc"
+
+[settings.dots.zshenv]
+source = "zshenv"
+target = ".zshenv"
+
+[settings.dots.zsh-config]
+source = "config/"
+target = ".config/zsh/"
+ignore = ["*.bak", "*.tmp"]

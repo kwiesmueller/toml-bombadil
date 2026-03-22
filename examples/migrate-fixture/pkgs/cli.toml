@@ -1,0 +1,15 @@
+# v3 import: cli package definitions (package-only file)
+[packages.ripgrep]
+tags = ["cli", "essential"]
+[packages.ripgrep.install]
+dnf = "ripgrep"
+apt = "ripgrep"
+brew = "ripgrep"
+cargo = "ripgrep"
+
+[packages.fd]
+tags = ["cli", "essential"]
+[packages.fd.install]
+dnf = "fd-find"
+apt = "fd-find"
+brew = "fd"

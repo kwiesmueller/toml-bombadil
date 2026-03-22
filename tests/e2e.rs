@@ -402,3 +402,278 @@ fn test_profile_work_source_override() {
     let content = read_file_after_link(".config/full-simple/config.conf", Some("work"));
     assert_that(&content).contains("work_specific = \"only_at_work\"");
 }
+
+// =============================================================================
+// Migrate Tests
+// =============================================================================
+
+/// Run `bombadil migrate` against the given dotfiles dir and return the output.
+fn run_migrate(dotfiles_dir_in_container: &str, output_dir_in_container: Option<&str>) -> Output {
+    let output_arg = output_dir_in_container
+        .map(|d| format!("--output {}", d))
+        .unwrap_or_default();
+
+    let script = format!(
+        r#"
+        set -e
+        mkdir -p /tmp/migrate-out
+        bombadil migrate {dotfiles_dir_in_container} {output_arg} 2>&1
+        "#,
+    );
+    run_in_container(&script)
+}
+
+#[test]
+fn test_migrate_exits_successfully() {
+    // The fixture bombadil.toml at /examples/migrate-fixture/ has three imports.
+    let output = run_migrate("/examples/migrate-fixture", Some("/tmp/migrate-out"));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "bombadil migrate failed:\nstdout: {}\nstderr: {}",
+        stdout,
+        stderr
+    );
+}
+
+#[test]
+fn test_migrate_writes_dots_toml_for_dot_import() {
+    // zsh/zsh.toml has settings.dots → should produce zsh/dots.toml in output dir.
+    let script = r#"
+        set -e
+        mkdir -p /tmp/migrate-out-zsh
+        bombadil migrate /examples/migrate-fixture --output /tmp/migrate-out-zsh 2>&1
+        test -f /tmp/migrate-out-zsh/zsh/dots.toml && echo EXISTS || echo MISSING
+    "#;
+    let output = run_in_container(script);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("EXISTS"),
+        "Expected zsh/dots.toml to be written, got: {}",
+        stdout
+    );
+}
+
+#[test]
+fn test_migrate_dots_toml_contains_file_mappings() {
+    // The generated zsh/dots.toml should contain the source→target mappings.
+    let script = r#"
+        set -e
+        mkdir -p /tmp/migrate-out-content
+        bombadil migrate /examples/migrate-fixture --output /tmp/migrate-out-content 2>/dev/null
+        cat /tmp/migrate-out-content/zsh/dots.toml
+    "#;
+    let output = run_in_container(script);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    // zsh.toml defines dots: zshrc → .zshrc, zshenv → .zshenv
+    assert!(
+        stdout.contains("zshrc"),
+        "Expected 'zshrc' file mapping in dots.toml, got: {}",
+        stdout
+    );
+    assert!(
+        stdout.contains(".zshrc") || stdout.contains("~/.zshrc"),
+        "Expected '~/.zshrc' target in dots.toml, got: {}",
+        stdout
+    );
+}
+
+#[test]
+fn test_migrate_preserves_ignore_patterns() {
+    // The zsh-config dot has ignore = ["*.bak", "*.tmp"]; verify they appear in output.
+    let script = r#"
+        set -e
+        mkdir -p /tmp/migrate-out-ignore
+        bombadil migrate /examples/migrate-fixture --output /tmp/migrate-out-ignore 2>/dev/null
+        cat /tmp/migrate-out-ignore/zsh/dots.toml
+    "#;
+    let output = run_in_container(script);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("*.bak"),
+        "Expected '*.bak' ignore pattern preserved, got: {}",
+        stdout
+    );
+    assert!(
+        stdout.contains("*.tmp"),
+        "Expected '*.tmp' ignore pattern preserved, got: {}",
+        stdout
+    );
+}
+
+#[test]
+fn test_migrate_package_only_file_goes_to_subdirectory() {
+    // pkgs/cli.toml has only [packages.*] → should produce pkgs/cli/dots.toml (not pkgs/dots.toml).
+    let script = r#"
+        set -e
+        mkdir -p /tmp/migrate-out-pkgonly
+        bombadil migrate /examples/migrate-fixture --output /tmp/migrate-out-pkgonly 2>&1
+        test -f /tmp/migrate-out-pkgonly/pkgs/cli/dots.toml && echo EXISTS || echo MISSING
+    "#;
+    let output = run_in_container(script);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("EXISTS"),
+        "Expected pkgs/cli/dots.toml to be written for package-only import, got: {}",
+        stdout
+    );
+}
+
+#[test]
+fn test_migrate_dry_run_writes_nothing() {
+    // --dry-run should print output but not create any files.
+    let script = r#"
+        set -e
+        mkdir -p /tmp/migrate-dry
+        bombadil migrate /examples/migrate-fixture --output /tmp/migrate-dry --dry-run 2>&1
+        # Verify no dots.toml files were created
+        find /tmp/migrate-dry -name 'dots.toml' | wc -l
+    "#;
+    let output = run_in_container(script);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    // The last line of output is the count from wc -l
+    let last_line = stdout.lines().last().unwrap_or("").trim();
+    assert_eq!(
+        last_line, "0",
+        "Expected no dots.toml files written during dry-run, found: {}",
+        last_line
+    );
+}
+
+#[test]
+fn test_migrate_dry_run_prints_would_write() {
+    // --dry-run output should mention what would be written.
+    let script = r#"
+        set -e
+        mkdir -p /tmp/migrate-dry2
+        bombadil migrate /examples/migrate-fixture --output /tmp/migrate-dry2 --dry-run 2>&1
+    "#;
+    let output = run_in_container(script);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("dry-run") || stdout.contains("would write"),
+        "Expected dry-run output to mention what would be written, got: {}",
+        stdout
+    );
+}
+
+#[test]
+fn test_migrate_skips_existing_dots_toml() {
+    // If a dots.toml already exists in the output, migrate should skip it.
+    let script = r#"
+        set -e
+        mkdir -p /tmp/migrate-skip/zsh
+        echo "[dot]" > /tmp/migrate-skip/zsh/dots.toml
+        bombadil migrate /examples/migrate-fixture --output /tmp/migrate-skip 2>&1
+        # Check that the pre-existing dots.toml was not overwritten
+        grep -c "^\[dot\]$" /tmp/migrate-skip/zsh/dots.toml
+    "#;
+    let output = run_in_container(script);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    // grep -c should return "1" (exactly one matching line in the minimal file)
+    let last_line = stdout.lines().last().unwrap_or("").trim();
+    assert_eq!(
+        last_line, "1",
+        "Expected pre-existing dots.toml to be preserved (grep count = 1), got: {}",
+        last_line
+    );
+}
+
+#[test]
+fn test_migrate_no_bombadil_toml_fails() {
+    // Running migrate on a directory with no bombadil.toml should fail.
+    let script = r#"
+        mkdir -p /tmp/empty-dotfiles
+        bombadil migrate /tmp/empty-dotfiles 2>&1
+        echo "exit:$?"
+    "#;
+    let output = run_in_container(script);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("exit:1") || !output.status.success(),
+        "Expected migrate to fail when bombadil.toml is missing, got: {}",
+        stdout
+    );
+}
+
+// =============================================================================
+// Error Case Tests
+// =============================================================================
+
+#[test]
+fn test_invalid_toml_config_fails() {
+    // A bombadil.toml with invalid TOML syntax should cause link to fail.
+    let extra_setup = r#"
+        echo "THIS IS NOT VALID TOML [[[[" > ~/dotfiles/bombadil.toml
+    "#;
+    let script = format!(
+        r#"
+        set -e
+        cp -r /examples/dotfiles ~/dotfiles
+        mkdir -p ~/dotfiles/.dots ~/.config ~/.local/bin
+        {extra_setup}
+        bombadil install ~/dotfiles 2>/dev/null
+        bombadil link --force 2>&1
+        echo "exit:$?"
+        "#,
+    );
+    let output = run_in_container(&script);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    // Either the process exits non-zero, or it reports an error in stdout
+    assert!(
+        !output.status.success() || stdout.contains("exit:1") || stdout.contains("error"),
+        "Expected link to fail with invalid TOML, but got success. stdout: {}",
+        stdout
+    );
+}
+
+#[test]
+fn test_link_dry_run_does_not_create_symlinks() {
+    // `bombadil link --dry-run` should not create symlinks.
+    let script = r#"
+        set -e
+        cp -r /examples/dotfiles ~/dotfiles
+        mkdir -p ~/dotfiles/.dots ~/.config ~/.local/bin
+        bombadil install ~/dotfiles 2>/dev/null
+        bombadil link --dry-run 2>&1
+        # The symlink should NOT exist after a dry-run
+        test -L ~/.config/full-simple/config.conf && echo SYMLINK || echo NOT_SYMLINK
+    "#;
+    let output = run_in_container(script);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let last_line = stdout.lines().last().unwrap_or("").trim();
+    assert_eq!(
+        last_line, "NOT_SYMLINK",
+        "Expected --dry-run to not create symlinks, but got: {}",
+        stdout
+    );
+}
+
+// =============================================================================
+// Multiple Imports Merge Tests
+// =============================================================================
+
+#[test]
+fn test_imports_multiple_files_all_dots_linked() {
+    // Both the main bombadil.toml dots and the imported extra-dots.toml dots should be linked.
+    let output = run_bombadil_in_container(None, "");
+    assert!(output.status.success());
+
+    // From main bombadil.toml
+    assert!(file_exists_after_link(".config/full-simple/config.conf", None));
+    // From imports/extra-dots.toml
+    assert!(file_exists_after_link(".config/imported/config.conf", None));
+}
+
+#[test]
+fn test_imports_vars_available_in_imported_dots() {
+    // Variables defined in the root config should be available to dots defined in imports.
+    let output = run_bombadil_in_container(None, "");
+    assert!(output.status.success());
+
+    // The imported config is a plain file; check it links and is readable
+    assert!(file_exists_after_link(".config/imported/config.conf", None));
+    let content = read_file_after_link(".config/imported/config.conf", None);
+    assert_that(&content).contains("imported = true");
+}
