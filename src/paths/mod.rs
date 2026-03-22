@@ -332,8 +332,7 @@ fn symlink_as_sudo(dot: &Dot) -> Result<()> {
             return Err(Symlink {
                 source_path: copy_path.to_owned(),
                 target: target.to_owned(),
-                cause: std::io::Error::new(
-                    std::io::ErrorKind::Other,
+                cause: std::io::Error::other(
                     "Failed to create parent (as sudo)",
                 ),
             });
@@ -354,8 +353,7 @@ fn symlink_as_sudo(dot: &Dot) -> Result<()> {
         return Err(Symlink {
             source_path: copy_path.to_owned(),
             target: target.to_owned(),
-            cause: std::io::Error::new(
-                std::io::ErrorKind::Other,
+            cause: std::io::Error::other(
                 "Failed to create symlink (as sudo)",
             ),
         });
@@ -401,8 +399,7 @@ fn unlink_sudo<P: AsRef<Path> + ?Sized>(path: &P) -> Result<()> {
     )?;
     if !status.success() {
         return Err(Unlink {
-            error: std::io::Error::new(
-                std::io::ErrorKind::Other,
+            error: std::io::Error::other(
                 "Failed to delete symlink (as sudo)",
             ),
             path: path.as_ref().to_path_buf(),

@@ -79,7 +79,13 @@ impl Conflict {
         source_path: &Path,
     ) -> Result<Option<Self>> {
         let dotfiles_dir = crate::settings::dotfile_dir();
-        Self::detect_in(dot_name, rendered_path, target_path, source_path, &dotfiles_dir)
+        Self::detect_in(
+            dot_name,
+            rendered_path,
+            target_path,
+            source_path,
+            &dotfiles_dir,
+        )
     }
 
     /// Detect if there's a conflict between the rendered dotfile and the target.
@@ -374,7 +380,12 @@ impl ReviewChange {
     }
 
     /// Create a new ReviewChange for a file update
-    pub fn update(dot_name: Option<String>, target_path: PathBuf, before: String, after: String) -> Self {
+    pub fn update(
+        dot_name: Option<String>,
+        target_path: PathBuf,
+        before: String,
+        after: String,
+    ) -> Self {
         Self {
             dot_name,
             target_path,
@@ -462,10 +473,7 @@ impl ReviewChange {
         println!("  {} Skip this change", "[n]".cyan());
         println!("  {} Edit the file", "[e]".cyan());
         println!();
-        println!(
-            "  {} Apply ALL remaining changes",
-            "[Y]".cyan().bold()
-        );
+        println!("  {} Apply ALL remaining changes", "[Y]".cyan().bold());
         println!("  {} Skip ALL remaining changes", "[N]".cyan().bold());
         println!();
         print!("{} ", ">".green().bold());
@@ -500,7 +508,8 @@ impl ReviewChange {
         // For now, we'll just note this is a limitation
         println!(
             "{}",
-            "Note: Manual editing should be done on the source file in your dotfiles repo.".yellow()
+            "Note: Manual editing should be done on the source file in your dotfiles repo."
+                .yellow()
         );
 
         Ok(())

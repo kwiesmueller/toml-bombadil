@@ -17,7 +17,6 @@ pub use plan::{
     PlannedPackage, SkipReason, SyncItem, SyncOptions, SyncPlan,
 };
 
-
 use crate::core::Result;
 use std::path::{Path, PathBuf};
 use tracing::instrument;
@@ -75,7 +74,7 @@ pub fn execute_plan(plan: SyncPlan) -> Result<()> {
     let storage = AuditStorage::new(&plan.dotfiles_dir);
     storage.init().map_err(|e| BombadilError::Io {
         context: format!("failed to init audit storage: {e}"),
-        source: std::io::Error::new(std::io::ErrorKind::Other, e.to_string()),
+        source: std::io::Error::other(e.to_string()),
     })?;
 
     let mut session = Session::new("bombadil sync", vec![]);
@@ -150,37 +149,37 @@ pub fn execute_plan(plan: SyncPlan) -> Result<()> {
                     }
                 }
             }
-            SyncItem::Package(pkg) => {
-                match &pkg.action {
-                    PackageAction::AlreadyInstalled => {
-                        info!(name = %pkg.name, "package already installed, skipping");
-                    }
-                    PackageAction::Skip { reason } => {
-                        info!(name = %pkg.name, reason = %reason, "⊘ skipping package");
-                    }
-                    PackageAction::Install => {
-                        info!(
-                            name = %pkg.name,
-                            install_name = %pkg.install_name,
-                            manager = ?pkg.manager_name,
-                            "installing package"
-                        );
-                        install_package(pkg);
-                    }
-                    PackageAction::Prune => {
-                        info!(name = %pkg.name, "package prune not yet implemented");
-                    }
+            SyncItem::Package(pkg) => match &pkg.action {
+                PackageAction::AlreadyInstalled => {
+                    info!(name = %pkg.name, "package already installed, skipping");
                 }
-            }
+                PackageAction::Skip { reason } => {
+                    info!(name = %pkg.name, reason = %reason, "⊘ skipping package");
+                }
+                PackageAction::Install => {
+                    info!(
+                        name = %pkg.name,
+                        install_name = %pkg.install_name,
+                        manager = ?pkg.manager_name,
+                        "installing package"
+                    );
+                    install_package(pkg);
+                }
+                PackageAction::Prune => {
+                    info!(name = %pkg.name, "package prune not yet implemented");
+                }
+            },
         }
     }
 
     session.complete();
     if !session.is_empty() {
-        storage.save_session(&session).map_err(|e| BombadilError::Io {
-            context: format!("failed to save audit session: {e}"),
-            source: std::io::Error::new(std::io::ErrorKind::Other, e.to_string()),
-        })?;
+        storage
+            .save_session(&session)
+            .map_err(|e| BombadilError::Io {
+                context: format!("failed to save audit session: {e}"),
+                source: std::io::Error::other(e.to_string()),
+            })?;
         info!(
             session_id = %session.id,
             actions = session.actions.len(),
@@ -399,10 +398,7 @@ fn apply_file(file: &PlannedFile) -> Result<Vec<crate::audit::ActionType>> {
 ///
 /// Creates a real file at `hard_copy_target` by copying from `source`, then
 /// optionally applies `hard_copy_permissions`. Records a `FileCreate` action.
-fn apply_hard_copy(
-    file: &PlannedFile,
-    actions: &mut Vec<crate::audit::ActionType>,
-) -> Result<()> {
+fn apply_hard_copy(file: &PlannedFile, actions: &mut Vec<crate::audit::ActionType>) -> Result<()> {
     use crate::audit::ActionType;
     use crate::core::BombadilError;
     use std::fs;

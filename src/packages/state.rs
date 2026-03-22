@@ -54,8 +54,8 @@ impl PackagesState {
         if state_path.exists() {
             let content = fs::read_to_string(&state_path)
                 .with_context(|| format!("reading packages state {}", state_path.display()))?;
-            let mut state: PackagesState = toml::from_str(&content)
-                .with_context(|| "Failed to parse packages state")?;
+            let mut state: PackagesState =
+                toml::from_str(&content).with_context(|| "Failed to parse packages state")?;
 
             state.path = state_path;
             Ok(state)

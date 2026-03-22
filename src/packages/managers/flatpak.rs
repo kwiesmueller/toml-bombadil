@@ -23,12 +23,18 @@ impl PackageManager for Flatpak {
 
     fn is_available(&self) -> bool {
         let available = command_exists("flatpak");
-        debug!(manager = "flatpak", available, "Checking package manager availability");
+        debug!(
+            manager = "flatpak",
+            available, "Checking package manager availability"
+        );
         available
     }
 
     fn is_installed(&self, package: &str) -> Result<bool> {
-        debug!(manager = "flatpak", package, "Checking if package is installed");
+        debug!(
+            manager = "flatpak",
+            package, "Checking if package is installed"
+        );
 
         // Flatpak uses application IDs like "org.gnome.Calculator"
         let output = Command::new("flatpak")
@@ -40,7 +46,10 @@ impl PackageManager for Flatpak {
             })?;
 
         let installed = output.status.success();
-        debug!(manager = "flatpak", package, installed, "Package installation check complete");
+        debug!(
+            manager = "flatpak",
+            package, installed, "Package installation check complete"
+        );
 
         Ok(installed)
     }
@@ -63,11 +72,14 @@ impl PackageManager for Flatpak {
             return Err(BombadilError::PackageInstallFailed {
                 name: package.to_string(),
                 manager: "flatpak".to_string(),
-                cause: std::io::Error::new(std::io::ErrorKind::Other, stderr.to_string()),
+                cause: std::io::Error::other(stderr.to_string()),
             });
         }
 
-        debug!(manager = "flatpak", package, "Package installed successfully");
+        debug!(
+            manager = "flatpak",
+            package, "Package installed successfully"
+        );
         Ok(())
     }
 
@@ -88,7 +100,7 @@ impl PackageManager for Flatpak {
             return Err(BombadilError::PackageRemoveFailed {
                 name: package.to_string(),
                 manager: "flatpak".to_string(),
-                cause: std::io::Error::new(std::io::ErrorKind::Other, stderr.to_string()),
+                cause: std::io::Error::other(stderr.to_string()),
             });
         }
 
@@ -111,7 +123,7 @@ impl PackageManager for Flatpak {
             let stderr = String::from_utf8_lossy(&output.stderr);
             return Err(BombadilError::Io {
                 context: format!("flatpak list failed: {}", stderr),
-                source: std::io::Error::new(std::io::ErrorKind::Other, stderr.to_string()),
+                source: std::io::Error::other(stderr.to_string()),
             });
         }
 
@@ -124,7 +136,11 @@ impl PackageManager for Flatpak {
             .map(|line| line.to_string())
             .collect();
 
-        debug!(manager = "flatpak", count = packages.len(), "Listed installed packages");
+        debug!(
+            manager = "flatpak",
+            count = packages.len(),
+            "Listed installed packages"
+        );
         Ok(packages)
     }
 }

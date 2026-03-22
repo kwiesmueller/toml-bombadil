@@ -57,12 +57,13 @@ pub fn serialize(value: &Value) -> Result<String> {
 pub fn apply_patch_preserving(toml_str: &str, patch: &SemanticPatch) -> Result<String> {
     use toml_edit::DocumentMut;
 
-    let mut doc: DocumentMut = toml_str.parse().map_err(|e: toml_edit::TomlError| {
-        BombadilError::ConfigInvalid {
-            message: format!("Invalid TOML: {}", e),
-            help: None,
-        }
-    })?;
+    let mut doc: DocumentMut =
+        toml_str
+            .parse()
+            .map_err(|e: toml_edit::TomlError| BombadilError::ConfigInvalid {
+                message: format!("Invalid TOML: {}", e),
+                help: None,
+            })?;
 
     // Apply merge operations
     for (path, value) in &patch.merge {
@@ -119,17 +120,19 @@ fn json_to_toml_edit(value: &Value) -> Option<toml_edit::Item> {
 
     match value {
         Value::Null => None,
-        Value::Bool(b) => Some(Item::Value(TomlValue::Boolean(toml_edit::Formatted::new(*b)))),
+        Value::Bool(b) => Some(Item::Value(TomlValue::Boolean(toml_edit::Formatted::new(
+            *b,
+        )))),
         Value::Number(n) => {
             if let Some(i) = n.as_i64() {
-                Some(Item::Value(TomlValue::Integer(toml_edit::Formatted::new(i))))
-            } else if let Some(f) = n.as_f64() {
-                Some(Item::Value(TomlValue::Float(toml_edit::Formatted::new(f))))
-            } else {
-                None
-            }
+                Some(Item::Value(TomlValue::Integer(toml_edit::Formatted::new(
+                    i,
+                ))))
+            } else { n.as_f64().map(|f| Item::Value(TomlValue::Float(toml_edit::Formatted::new(f)))) }
         }
-        Value::String(s) => Some(Item::Value(TomlValue::String(toml_edit::Formatted::new(s.clone())))),
+        Value::String(s) => Some(Item::Value(TomlValue::String(toml_edit::Formatted::new(
+            s.clone(),
+        )))),
         Value::Array(arr) => {
             let mut toml_arr = Array::new();
             for item in arr {
@@ -169,7 +172,10 @@ enabled = true
 "#;
 
         let mut merge = HashMap::new();
-        merge.insert("/settings".to_string(), json!({"theme": "dark", "fontSize": 14}));
+        merge.insert(
+            "/settings".to_string(),
+            json!({"theme": "dark", "fontSize": 14}),
+        );
 
         let patch = SemanticPatch {
             format: SemanticFormat::Toml,

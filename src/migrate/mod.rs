@@ -45,7 +45,9 @@
 //!   (v4 schema supports them) but execution is currently stubbed.
 
 use crate::settings::imports::ImportedSettings;
-use crate::settings::packages::{CargoConfig, InstallMethods as V3InstallMethods, Package, PackageManagerConfig};
+use crate::settings::packages::{
+    CargoConfig, InstallMethods as V3InstallMethods, Package, PackageManagerConfig,
+};
 use anyhow::{Context, Result};
 use std::fmt::Write as FmtWrite;
 use std::path::{Path, PathBuf};
@@ -88,7 +90,10 @@ impl MigrationReport {
         }
 
         if !self.skipped_existing.is_empty() {
-            println!("\n⊘ Skipped — dots.toml already exists ({}):", self.skipped_existing.len());
+            println!(
+                "\n⊘ Skipped — dots.toml already exists ({}):",
+                self.skipped_existing.len()
+            );
             for p in &self.skipped_existing {
                 println!("  {}", p.display());
             }
@@ -121,17 +126,14 @@ impl MigrationReport {
 ///
 /// Existing `dots.toml` files in `output_dir` are never overwritten.
 pub fn migrate(dotfiles_dir: &Path, output_dir: &Path, dry_run: bool) -> Result<MigrationReport> {
-    use config::{Config, File};
     use crate::settings::imports::ImportPath;
+    use config::{Config, File};
 
     let mut report = MigrationReport::default();
 
     let bombadil_toml = dotfiles_dir.join("bombadil.toml");
     if !bombadil_toml.exists() {
-        anyhow::bail!(
-            "no bombadil.toml found in {}",
-            dotfiles_dir.display()
-        );
+        anyhow::bail!("no bombadil.toml found in {}", dotfiles_dir.display());
     }
 
     // Parse only the `import` list from bombadil.toml (we don't need the full Settings here).
@@ -166,7 +168,14 @@ pub fn migrate(dotfiles_dir: &Path, output_dir: &Path, dry_run: bool) -> Result<
         // Output path mirrors the input path's directory structure relative to dotfiles_dir.
         let rel_dir = rel_path.parent().unwrap_or(std::path::Path::new(""));
 
-        match migrate_import_file(&abs_path, dotfiles_dir, rel_dir, output_dir, dry_run, &mut report) {
+        match migrate_import_file(
+            &abs_path,
+            dotfiles_dir,
+            rel_dir,
+            output_dir,
+            dry_run,
+            &mut report,
+        ) {
             Ok(Some(out_path)) => report.written.push(out_path),
             Ok(None) => {}
             Err(e) => report.errors.push((abs_path, e.to_string())),
@@ -318,7 +327,7 @@ fn generate_dots_toml(
     dot_name: &str,
     parsed: &ImportedSettings,
     packages: &std::collections::HashMap<String, crate::settings::packages::Package>,
-    source_dir: &Path,   // relative-to-dotfiles-root directory of the source file
+    source_dir: &Path, // relative-to-dotfiles-root directory of the source file
     paths_relative: bool,
     dotfiles_dir: &Path,
     report: &mut MigrationReport,
@@ -370,10 +379,7 @@ fn generate_dots_toml(
                 dot.source.to_string_lossy().to_string()
             } else {
                 // Source is relative to dotfiles root; make it relative to source_dir.
-                source_dir
-                    .join(&dot.source)
-                    .to_string_lossy()
-                    .to_string()
+                source_dir.join(&dot.source).to_string_lossy().to_string()
             };
 
             let target = normalize_target(&dot.target.to_string_lossy());
@@ -386,7 +392,8 @@ fn generate_dots_toml(
             if needs_extended {
                 let mut options = format!("{{ target = {:?}", target);
                 if !dot.ignore.is_empty() {
-                    let patterns: Vec<String> = dot.ignore.iter().map(|p| format!("{:?}", p)).collect();
+                    let patterns: Vec<String> =
+                        dot.ignore.iter().map(|p| format!("{:?}", p)).collect();
                     write!(options, ", ignore = [{}]", patterns.join(", ")).unwrap();
                 }
                 options.push_str(" }");
@@ -431,17 +438,25 @@ fn generate_dots_toml(
         writeln!(out, "\n[dot.profiles.{}]", profile_name).unwrap();
 
         if !profile.prehooks.is_empty() {
-            let hooks: Vec<String> = profile.prehooks.iter().map(|h| format!("{:?}", h)).collect();
+            let hooks: Vec<String> = profile
+                .prehooks
+                .iter()
+                .map(|h| format!("{:?}", h))
+                .collect();
             writeln!(out, "prehooks = [{}]", hooks.join(", ")).unwrap();
         }
         if !profile.posthooks.is_empty() {
-            let hooks: Vec<String> = profile.posthooks.iter().map(|h| format!("{:?}", h)).collect();
+            let hooks: Vec<String> = profile
+                .posthooks
+                .iter()
+                .map(|h| format!("{:?}", h))
+                .collect();
             writeln!(out, "posthooks = [{}]", hooks.join(", ")).unwrap();
         }
 
         if !profile.dots.is_empty() {
             writeln!(out, "\n[dot.profiles.{}.files]", profile_name).unwrap();
-            for (_, dot_override) in &profile.dots {
+            for dot_override in profile.dots.values() {
                 if let (Some(src), Some(tgt)) = (&dot_override.source, &dot_override.target) {
                     let source_key = if paths_relative {
                         src.to_string_lossy().to_string()
@@ -474,8 +489,16 @@ fn emit_package(
     }
 
     if !pkg.enabled {
-        writeln!(out, "# WARNING: package was disabled in v3 (enabled = false)").unwrap();
-        writeln!(out, "# Add tags = [\"disabled\"] and filter it via active_tags in your profile.").unwrap();
+        writeln!(
+            out,
+            "# WARNING: package was disabled in v3 (enabled = false)"
+        )
+        .unwrap();
+        writeln!(
+            out,
+            "# Add tags = [\"disabled\"] and filter it via active_tags in your profile."
+        )
+        .unwrap();
         report.warnings.push(format!(
             "{}: package '{}' was disabled — no direct v4 equivalent; use tag filtering",
             dot_name, pkg_name
@@ -521,7 +544,11 @@ fn emit_install_methods(
     }
     if install.binary.is_some() {
         // Binary config is complex — emit a comment and skip for now.
-        writeln!(out, "# TODO: binary install — configure manually in v4 format").unwrap();
+        writeln!(
+            out,
+            "# TODO: binary install — configure manually in v4 format"
+        )
+        .unwrap();
         report.warnings.push(format!(
             "{}: package '{}' uses binary install — configure manually",
             dot_name, pkg_name
@@ -555,14 +582,20 @@ fn emit_pkg_manager_field(
         PackageManagerConfig::Simple(name) => {
             writeln!(out, "install.{} = {:?}", manager, name).unwrap();
         }
-        PackageManagerConfig::Extended { package, repo, repo_url, gpg_key } => {
+        PackageManagerConfig::Extended {
+            package,
+            repo,
+            repo_url,
+            gpg_key,
+        } => {
             if let Some(repo_path) = repo {
                 // v4 supports repo file setup.
                 writeln!(
                     out,
                     "install.{} = {{ package = {:?}, repo = {:?} }}",
                     manager, package, repo_path
-                ).unwrap();
+                )
+                .unwrap();
             } else {
                 writeln!(out, "install.{} = {:?}", manager, package).unwrap();
             }
@@ -571,7 +604,8 @@ fn emit_pkg_manager_field(
                     out,
                     "# NOTE: repo_url/gpg_key for '{}' have no v4 equivalent — configure manually",
                     manager
-                ).unwrap();
+                )
+                .unwrap();
                 report.warnings.push(format!(
                     "{}: package '{}' {} config has repo_url/gpg_key — configure manually",
                     dot_name, pkg_name, manager
@@ -605,14 +639,19 @@ fn emit_cargo_field(out: &mut String, cargo: &CargoConfig) {
                     out,
                     "install.cargo = {{ name = {:?}, git = {:?}",
                     crate_name, git_url
-                ).unwrap();
+                )
+                .unwrap();
                 if !features.is_empty() {
                     let feats: Vec<String> = features.iter().map(|f| format!("{:?}", f)).collect();
                     write!(out, ", features = [{}]", feats.join(", ")).unwrap();
                 }
                 writeln!(out, " }}").unwrap();
                 if branch.is_some() || tag.is_some() {
-                    writeln!(out, "# NOTE: branch/tag for cargo git install have no v4 equivalent").unwrap();
+                    writeln!(
+                        out,
+                        "# NOTE: branch/tag for cargo git install have no v4 equivalent"
+                    )
+                    .unwrap();
                 }
             } else {
                 if features.is_empty() {
@@ -624,7 +663,8 @@ fn emit_cargo_field(out: &mut String, cargo: &CargoConfig) {
                         "install.cargo = {{ name = {:?}, features = [{}] }}",
                         crate_name,
                         feats.join(", ")
-                    ).unwrap();
+                    )
+                    .unwrap();
                 }
             }
         }
@@ -655,7 +695,10 @@ mod tests {
 
     #[test]
     fn normalize_relative_target() {
-        assert_eq!(normalize_target(".config/zsh/aliases.zsh"), "~/.config/zsh/aliases.zsh");
+        assert_eq!(
+            normalize_target(".config/zsh/aliases.zsh"),
+            "~/.config/zsh/aliases.zsh"
+        );
     }
 
     #[test]

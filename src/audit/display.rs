@@ -5,7 +5,7 @@
 use super::action::{Action, ActionType};
 use super::capture::CapturedTrace;
 use super::file_index::{FileAction, FileActionType};
-use super::plan::{ActionPlan, PlannedAction, PlanSummary};
+use super::plan::{ActionPlan, PlanSummary, PlannedAction};
 use super::session::Session;
 use super::storage::AuditStorage;
 use colored::*;
@@ -18,12 +18,7 @@ pub fn format_planned_action(action: &PlannedAction, index: usize) -> String {
     let indicator = action.action_type.type_indicator();
     let description = action.action_type.description();
 
-    format!(
-        "  [{:>3}] {} {}",
-        index,
-        indicator.bold(),
-        description
-    )
+    format!("  [{:>3}] {} {}", index, indicator.bold(), description)
 }
 
 /// Format an executed action for display.
@@ -32,10 +27,11 @@ pub fn format_action(action: &Action) -> String {
     let description = action.action_type.description();
 
     format!(
-        "  {} [{}] {}",
+        "  {} [{}] {} {}",
         "✓".green(),
         action.id.as_str().cyan(),
-        format!("{} {}", indicator, description)
+        indicator,
+        description
     )
 }
 
@@ -132,35 +128,68 @@ pub fn format_session_log(session: &Session, verbose: bool) -> String {
 pub fn format_action_details(action: &Action) -> String {
     let mut output = String::new();
 
-    output.push_str(&format!("{}: {}\n", "Action ID".bold(), action.id.as_str().cyan()));
+    output.push_str(&format!(
+        "{}: {}\n",
+        "Action ID".bold(),
+        action.id.as_str().cyan()
+    ));
     output.push_str(&format!("{}: {}\n", "Timestamp".bold(), action.timestamp));
-    output.push_str(&format!("{}: {}\n", "Type".bold(), action.action_type.type_indicator()));
+    output.push_str(&format!(
+        "{}: {}\n",
+        "Type".bold(),
+        action.action_type.type_indicator()
+    ));
 
     if let Some(dot) = &action.dot_name {
         output.push_str(&format!("{}: {}\n", "Dot".bold(), dot));
     }
 
-    output.push_str(&format!("{}: {}\n", "Description".bold(), action.action_type.description()));
-    output.push_str(&format!("{}: {}\n", "Revertible".bold(),
-        if action.is_revertible() { "yes".green() } else { "no".red() }
+    output.push_str(&format!(
+        "{}: {}\n",
+        "Description".bold(),
+        action.action_type.description()
+    ));
+    output.push_str(&format!(
+        "{}: {}\n",
+        "Revertible".bold(),
+        if action.is_revertible() {
+            "yes".green()
+        } else {
+            "no".red()
+        }
     ));
 
     // Add type-specific details
     match &action.action_type {
-        ActionType::FileCreate { target, source, content_hash } => {
+        ActionType::FileCreate {
+            target,
+            source,
+            content_hash,
+        } => {
             output.push_str(&format!("\n{}\n", "Details:".bold()));
             output.push_str(&format!("  Target: {}\n", target.display()));
             output.push_str(&format!("  Source: {}\n", source.display()));
             output.push_str(&format!("  Content hash: {}\n", content_hash));
         }
-        ActionType::FileUpdate { target, source, before_hash, after_hash } => {
+        ActionType::FileUpdate {
+            target,
+            source,
+            before_hash,
+            after_hash,
+        } => {
             output.push_str(&format!("\n{}\n", "Details:".bold()));
             output.push_str(&format!("  Target: {}\n", target.display()));
             output.push_str(&format!("  Source: {}\n", source.display()));
             output.push_str(&format!("  Before hash: {}\n", before_hash));
             output.push_str(&format!("  After hash: {}\n", after_hash));
         }
-        ActionType::FilePatch { target, base, patches_applied, before_hash, after_hash } => {
+        ActionType::FilePatch {
+            target,
+            base,
+            patches_applied,
+            before_hash,
+            after_hash,
+        } => {
             output.push_str(&format!("\n{}\n", "Details:".bold()));
             output.push_str(&format!("  Target: {}\n", target.display()));
             output.push_str(&format!("  Base: {}\n", base.display()));
@@ -168,7 +197,13 @@ pub fn format_action_details(action: &Action) -> String {
             output.push_str(&format!("  Before hash: {}\n", before_hash));
             output.push_str(&format!("  After hash: {}\n", after_hash));
         }
-        ActionType::SemanticPatch { target, format, operations, before_hash, after_hash } => {
+        ActionType::SemanticPatch {
+            target,
+            format,
+            operations,
+            before_hash,
+            after_hash,
+        } => {
             output.push_str(&format!("\n{}\n", "Details:".bold()));
             output.push_str(&format!("  Target: {}\n", target.display()));
             output.push_str(&format!("  Format: {}\n", format));
@@ -176,7 +211,12 @@ pub fn format_action_details(action: &Action) -> String {
             output.push_str(&format!("  Before hash: {}\n", before_hash));
             output.push_str(&format!("  After hash: {}\n", after_hash));
         }
-        ActionType::Inject { target, marker, before_hash, after_hash } => {
+        ActionType::Inject {
+            target,
+            marker,
+            before_hash,
+            after_hash,
+        } => {
             output.push_str(&format!("\n{}\n", "Details:".bold()));
             output.push_str(&format!("  Target: {}\n", target.display()));
             output.push_str(&format!("  Marker: {}\n", marker));
@@ -188,25 +228,44 @@ pub fn format_action_details(action: &Action) -> String {
             output.push_str(&format!("  Source: {}\n", source.display()));
             output.push_str(&format!("  Target: {}\n", target.display()));
         }
-        ActionType::SymlinkRemove { target, was_pointing_to } => {
+        ActionType::SymlinkRemove {
+            target,
+            was_pointing_to,
+        } => {
             output.push_str(&format!("\n{}\n", "Details:".bold()));
             output.push_str(&format!("  Target: {}\n", target.display()));
-            output.push_str(&format!("  Was pointing to: {}\n", was_pointing_to.display()));
+            output.push_str(&format!(
+                "  Was pointing to: {}\n",
+                was_pointing_to.display()
+            ));
         }
-        ActionType::Backup { original, backup_location, content_hash } => {
+        ActionType::Backup {
+            original,
+            backup_location,
+            content_hash,
+        } => {
             output.push_str(&format!("\n{}\n", "Details:".bold()));
             output.push_str(&format!("  Original: {}\n", original.display()));
             output.push_str(&format!("  Backup: {}\n", backup_location.display()));
             output.push_str(&format!("  Content hash: {}\n", content_hash));
         }
-        ActionType::ConflictResolved { target, resolution, dotfile_hash, system_hash } => {
+        ActionType::ConflictResolved {
+            target,
+            resolution,
+            dotfile_hash,
+            system_hash,
+        } => {
             output.push_str(&format!("\n{}\n", "Details:".bold()));
             output.push_str(&format!("  Target: {}\n", target.display()));
             output.push_str(&format!("  Resolution: {}\n", resolution));
             output.push_str(&format!("  Dotfile hash: {}\n", dotfile_hash));
             output.push_str(&format!("  System hash: {}\n", system_hash));
         }
-        ActionType::HookExecuted { command, hook_type, exit_code } => {
+        ActionType::HookExecuted {
+            command,
+            hook_type,
+            exit_code,
+        } => {
             output.push_str(&format!("\n{}\n", "Details:".bold()));
             output.push_str(&format!("  Command: {}\n", command));
             output.push_str(&format!("  Hook type: {}\n", hook_type));
@@ -259,12 +318,19 @@ pub fn generate_diff_from_storage(storage: &AuditStorage, action: &Action) -> Op
     let after_str = String::from_utf8_lossy(&after);
 
     let target = action.action_type.target_path()?;
-    Some(format_diff(&before_str, &after_str, &target.to_string_lossy()))
+    Some(format_diff(
+        &before_str,
+        &after_str,
+        &target.to_string_lossy(),
+    ))
 }
 
 /// Interactive prompt for plan approval.
 pub fn prompt_execute(plan: &ActionPlan) -> io::Result<bool> {
-    print!("\nExecute {} action(s)? [y/n/i for interactive]: ", plan.approved_count());
+    print!(
+        "\nExecute {} action(s)? [y/n/i for interactive]: ",
+        plan.approved_count()
+    );
     io::stdout().flush()?;
 
     let mut input = String::new();
@@ -322,7 +388,10 @@ pub fn print_interactive_help() {
     println!("  {} Show all actions affecting path", "file <path>".cyan());
     println!("  {}    Skip action N (won't execute)", "skip <N>".cyan());
     println!("  {}  Restore skipped action", "unskip <N>".cyan());
-    println!("  {}        Show plan again (with skip status)", "list".cyan());
+    println!(
+        "  {}        Show plan again (with skip status)",
+        "list".cyan()
+    );
     println!("  {}   Execute approved actions", "y/execute".cyan());
     println!("  {}     Cancel and exit", "n/abort".cyan());
     println!("  {} Save plan to custom file", "save <file>".cyan());
@@ -465,7 +534,11 @@ pub fn format_file_action(
     // Add details from the full Action if available
     if let Some(act) = action {
         match &act.action_type {
-            ActionType::FileCreate { source, content_hash, .. } => {
+            ActionType::FileCreate {
+                source,
+                content_hash,
+                ..
+            } => {
                 output.push_str(&format!(
                     "          (from {})\n",
                     source.display().to_string().dimmed()
@@ -475,7 +548,11 @@ pub fn format_file_action(
                     truncate_hash(content_hash).dimmed()
                 ));
             }
-            ActionType::FileUpdate { before_hash, after_hash, .. } => {
+            ActionType::FileUpdate {
+                before_hash,
+                after_hash,
+                ..
+            } => {
                 output.push_str(&format!(
                     "          Before: {}... {} After: {}...\n",
                     truncate_hash(before_hash).dimmed(),
@@ -483,7 +560,13 @@ pub fn format_file_action(
                     truncate_hash(after_hash).dimmed()
                 ));
             }
-            ActionType::FilePatch { base, patches_applied, before_hash, after_hash, .. } => {
+            ActionType::FilePatch {
+                base,
+                patches_applied,
+                before_hash,
+                after_hash,
+                ..
+            } => {
                 output.push_str(&format!(
                     "          Base: {}, {} patches applied\n",
                     base.display().to_string().dimmed(),
@@ -496,7 +579,13 @@ pub fn format_file_action(
                     truncate_hash(after_hash).dimmed()
                 ));
             }
-            ActionType::SemanticPatch { format, operations, before_hash, after_hash, .. } => {
+            ActionType::SemanticPatch {
+                format,
+                operations,
+                before_hash,
+                after_hash,
+                ..
+            } => {
                 output.push_str(&format!(
                     "          Format: {}, {} operations\n",
                     format.dimmed(),
@@ -509,7 +598,12 @@ pub fn format_file_action(
                     truncate_hash(after_hash).dimmed()
                 ));
             }
-            ActionType::Inject { marker, before_hash, after_hash, .. } => {
+            ActionType::Inject {
+                marker,
+                before_hash,
+                after_hash,
+                ..
+            } => {
                 output.push_str(&format!(
                     "          Inject at marker '{}'\n",
                     marker.yellow()
@@ -527,13 +621,19 @@ pub fn format_file_action(
                     source.display().to_string().dimmed()
                 ));
             }
-            ActionType::SymlinkRemove { was_pointing_to, .. } => {
+            ActionType::SymlinkRemove {
+                was_pointing_to, ..
+            } => {
                 output.push_str(&format!(
                     "          Was pointing to {}\n",
                     was_pointing_to.display().to_string().dimmed()
                 ));
             }
-            ActionType::Backup { backup_location, content_hash, .. } => {
+            ActionType::Backup {
+                backup_location,
+                content_hash,
+                ..
+            } => {
                 output.push_str(&format!(
                     "          Backed up to {}\n",
                     backup_location.display().to_string().dimmed()
@@ -543,7 +643,12 @@ pub fn format_file_action(
                     truncate_hash(content_hash).dimmed()
                 ));
             }
-            ActionType::ConflictResolved { resolution, dotfile_hash, system_hash, .. } => {
+            ActionType::ConflictResolved {
+                resolution,
+                dotfile_hash,
+                system_hash,
+                ..
+            } => {
                 output.push_str(&format!(
                     "          Resolution: {}\n",
                     resolution.to_string().yellow()
@@ -584,7 +689,11 @@ pub fn format_traces(traces: &[CapturedTrace]) -> String {
         return output;
     }
 
-    output.push_str(&format!("{} ({} entries):\n\n", "Captured logs".bold(), traces.len()));
+    output.push_str(&format!(
+        "{} ({} entries):\n\n",
+        "Captured logs".bold(),
+        traces.len()
+    ));
 
     for trace in traces {
         let timestamp = trace.timestamp.format("%H:%M:%S%.3f");
@@ -603,7 +712,7 @@ pub fn format_traces(traces: &[CapturedTrace]) -> String {
             format!("[{}] ", trace.span_path.join("::").dimmed())
         };
 
-        let fields_str = if trace.fields.as_object().map_or(true, |m| m.is_empty()) {
+        let fields_str = if trace.fields.as_object().is_none_or(|m| m.is_empty()) {
             String::new()
         } else {
             format!(" {}", trace.fields.to_string().dimmed())
@@ -635,17 +744,32 @@ fn truncate_hash(hash: &str) -> &str {
 /// Print legend for action indicators.
 pub fn print_legend() {
     println!("\n{}", "Legend:".bold());
-    println!("  {} Create file    {} Update file    {} Patch file", "+".bold(), "~".bold(), "P".bold());
-    println!("  {} Semantic patch {} Inject         {} Symlink", "S".bold(), "I".bold(), "L".bold());
-    println!("  {} Unlink         {} Backup         {} Conflict", "U".bold(), "B".bold(), "C".bold());
+    println!(
+        "  {} Create file    {} Update file    {} Patch file",
+        "+".bold(),
+        "~".bold(),
+        "P".bold()
+    );
+    println!(
+        "  {} Semantic patch {} Inject         {} Symlink",
+        "S".bold(),
+        "I".bold(),
+        "L".bold()
+    );
+    println!(
+        "  {} Unlink         {} Backup         {} Conflict",
+        "U".bold(),
+        "B".bold(),
+        "C".bold()
+    );
     println!("  {} Hook", "H".bold());
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::action::ActionId;
     use super::super::session::SessionId;
+    use super::*;
     use chrono::{TimeZone, Utc};
     use std::path::PathBuf;
 

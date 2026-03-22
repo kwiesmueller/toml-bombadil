@@ -27,5 +27,10 @@ pub enum InstallResult {
 /// Trait for dotfile installation strategies.
 pub trait DotInstaller {
     /// Install the dotfile using this strategy.
-    fn install(&self, dot: &Dot, dotfiles_dir: &Path, vars: &tera::Context) -> Result<InstallResult>;
+    fn install(
+        &self,
+        dot: &Dot,
+        dotfiles_dir: &Path,
+        vars: &tera::Context,
+    ) -> Result<InstallResult>;
 }

@@ -28,14 +28,20 @@ impl DotInstaller for FullInstaller {
         dotfiles_dir: &Path,
         vars: &tera::Context,
     ) -> Result<InstallResult> {
-        let source = dot.source.clone().ok_or_else(|| BombadilError::ConfigInvalid {
-            message: "Dot missing source path".to_string(),
-            help: Some("Add a 'source' field to the dot configuration".to_string()),
-        })?;
-        let target = dot.target.clone().ok_or_else(|| BombadilError::ConfigInvalid {
-            message: "Dot missing target path".to_string(),
-            help: Some("Add a 'target' field to the dot configuration".to_string()),
-        })?;
+        let source = dot
+            .source
+            .clone()
+            .ok_or_else(|| BombadilError::ConfigInvalid {
+                message: "Dot missing source path".to_string(),
+                help: Some("Add a 'source' field to the dot configuration".to_string()),
+            })?;
+        let target = dot
+            .target
+            .clone()
+            .ok_or_else(|| BombadilError::ConfigInvalid {
+                message: "Dot missing target path".to_string(),
+                help: Some("Add a 'target' field to the dot configuration".to_string()),
+            })?;
         let ignore = dot.ignore.clone();
 
         let source_path = dotfiles_dir.join(&source);
@@ -215,9 +221,9 @@ impl FullInstaller {
         self.create_symlink(copy_path, target)?;
 
         // Aggregate results
-        if results.iter().any(|r| *r == InstallResult::Updated) {
+        if results.contains(&InstallResult::Updated) {
             Ok(InstallResult::Updated)
-        } else if results.iter().any(|r| *r == InstallResult::Created) {
+        } else if results.contains(&InstallResult::Created) {
             Ok(InstallResult::Created)
         } else {
             Ok(InstallResult::Unchanged)
@@ -294,7 +300,10 @@ fn build_ignored_paths(source: &Path, patterns: &[String]) -> Result<Vec<PathBuf
             help: None,
         })?;
 
-    Ok(walker.filter_map(|e| e.ok()).map(|e| e.path().to_path_buf()).collect())
+    Ok(walker
+        .filter_map(|e| e.ok())
+        .map(|e| e.path().to_path_buf())
+        .collect())
 }
 
 /// Extract variables from a Tera Context into a HashMap.

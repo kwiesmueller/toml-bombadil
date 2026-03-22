@@ -69,6 +69,7 @@ pub enum RevertWarning {
 
 /// Options for file-level revert
 #[derive(Debug, Clone)]
+#[derive(Default)]
 pub struct FileRevertOptions {
     /// Force revert even if file was modified
     pub force: bool,
@@ -80,16 +81,6 @@ pub struct FileRevertOptions {
     pub to_action_id: Option<ActionId>,
 }
 
-impl Default for FileRevertOptions {
-    fn default() -> Self {
-        Self {
-            force: false,
-            dry_run: false,
-            continue_on_error: false,
-            to_action_id: None,
-        }
-    }
-}
 
 /// Engine for reverting actions.
 pub struct RevertEngine {
@@ -142,24 +133,16 @@ impl RevertEngine {
             }
 
             ActionType::FileUpdate {
-                target,
-                after_hash,
-                ..
+                target, after_hash, ..
             }
             | ActionType::FilePatch {
-                target,
-                after_hash,
-                ..
+                target, after_hash, ..
             }
             | ActionType::SemanticPatch {
-                target,
-                after_hash,
-                ..
+                target, after_hash, ..
             }
             | ActionType::Inject {
-                target,
-                after_hash,
-                ..
+                target, after_hash, ..
             } => {
                 // Need before content to revert
                 if !self.storage.has_content(&action.id) {
@@ -186,7 +169,7 @@ impl RevertEngine {
 
             ActionType::SymlinkCreate { target, source } => {
                 // Can revert by removing the symlink
-                if !target.symlink_metadata().is_ok() {
+                if target.symlink_metadata().is_err() {
                     return RevertCheck::AlreadyReverted;
                 }
 
@@ -226,8 +209,7 @@ impl RevertEngine {
             }
 
             ActionType::Backup {
-                backup_location,
-                ..
+                backup_location, ..
             } => {
                 // Can revert by moving backup back to original
                 if !backup_location.exists() {
@@ -324,10 +306,7 @@ impl RevertEngine {
                 ..
             } => {
                 self.revert_backup(original, backup_location)?;
-                format!(
-                    "Restored {} from backup",
-                    original.display()
-                )
+                format!("Restored {} from backup", original.display())
             }
 
             _ => unreachable!(),
@@ -389,10 +368,8 @@ impl RevertEngine {
         if let Some(target) = action.action_type.target_path() {
             let subsequent = self.file_index.actions_after(target, &action.id);
             if !subsequent.is_empty() {
-                let action_ids: Vec<ActionId> = subsequent
-                    .iter()
-                    .map(|fa| fa.action_id.clone())
-                    .collect();
+                let action_ids: Vec<ActionId> =
+                    subsequent.iter().map(|fa| fa.action_id.clone()).collect();
                 warnings.push(RevertWarning::SubsequentActionsExist {
                     actions: action_ids.clone(),
                 });
@@ -401,17 +378,16 @@ impl RevertEngine {
                 for fa in subsequent {
                     warnings.push(RevertWarning::WillInvalidateAction {
                         action_id: fa.action_id.clone(),
-                        reason: format!(
-                            "This action was applied after the action being reverted"
-                        ),
+                        reason: "This action was applied after the action being reverted".to_string(),
                     });
                 }
             }
         }
 
-        let can_revert = blockers.is_empty() || blockers.iter().all(|b| {
-            matches!(b, RevertBlocker::FileModifiedExternally { .. })
-        });
+        let can_revert = blockers.is_empty()
+            || blockers
+                .iter()
+                .all(|b| matches!(b, RevertBlocker::FileModifiedExternally { .. }));
 
         Ok(RevertAnalysis {
             action: action.clone(),
@@ -441,7 +417,11 @@ impl RevertEngine {
     ///
     /// This retrieves all actions for the given file from the file index
     /// and reverts them in reverse chronological order (newest first).
-    pub fn revert_file(&self, path: &Path, options: FileRevertOptions) -> Result<Vec<RevertResult>> {
+    pub fn revert_file(
+        &self,
+        path: &Path,
+        options: FileRevertOptions,
+    ) -> Result<Vec<RevertResult>> {
         let mut results = Vec::new();
 
         // Get all actions for this file
@@ -458,7 +438,8 @@ impl RevertEngine {
         }
 
         // Determine which actions to revert based on to_action_id
-        let actions_to_revert: Vec<&FileAction> = if let Some(ref target_id) = options.to_action_id {
+        let actions_to_revert: Vec<&FileAction> = if let Some(ref target_id) = options.to_action_id
+        {
             // Find actions newer than the target
             self.file_index.actions_after(path, target_id)
         } else {
@@ -507,7 +488,10 @@ impl RevertEngine {
                     action_id: action.id.clone(),
                     success: analysis.can_revert,
                     message: if analysis.can_revert {
-                        format!("[dry-run] Would revert: {}", action.action_type.description())
+                        format!(
+                            "[dry-run] Would revert: {}",
+                            action.action_type.description()
+                        )
                     } else {
                         format!(
                             "[dry-run] Cannot revert: {} blockers",
@@ -576,10 +560,7 @@ impl RevertEngine {
     fn load_action(&self, action_id: &ActionId) -> Result<Option<Action>> {
         match self.storage.find_session_for_action(action_id)? {
             Some(session) => {
-                let action = session
-                    .actions
-                    .into_iter()
-                    .find(|a| &a.id == action_id);
+                let action = session.actions.into_iter().find(|a| &a.id == action_id);
                 Ok(action)
             }
             None => Ok(None),
@@ -1057,10 +1038,7 @@ mod tests {
     fn test_revert_warning_variants() {
         // Test that all warning variants can be created
         let warning1 = RevertWarning::SubsequentActionsExist {
-            actions: vec![
-                ActionId::from_string("a1"),
-                ActionId::from_string("a2"),
-            ],
+            actions: vec![ActionId::from_string("a1"), ActionId::from_string("a2")],
         };
         assert!(matches!(
             warning1,

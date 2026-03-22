@@ -23,7 +23,10 @@ impl PackageManager for Apt {
 
     fn is_available(&self) -> bool {
         let available = command_exists("apt-get");
-        debug!(manager = "apt", available, "Checking package manager availability");
+        debug!(
+            manager = "apt",
+            available, "Checking package manager availability"
+        );
         available
     }
 
@@ -34,13 +37,19 @@ impl PackageManager for Apt {
             .args(["-W", "-f=${Status}", package])
             .output()
             .map_err(|e| BombadilError::Io {
-                context: format!("Failed to check if package '{}' is installed via dpkg-query", package),
+                context: format!(
+                    "Failed to check if package '{}' is installed via dpkg-query",
+                    package
+                ),
                 source: e,
             })?;
 
         let stdout = String::from_utf8_lossy(&output.stdout);
         let installed = output.status.success() && stdout.contains("install ok installed");
-        debug!(manager = "apt", package, installed, "Package installation check complete");
+        debug!(
+            manager = "apt",
+            package, installed, "Package installation check complete"
+        );
 
         Ok(installed)
     }
@@ -58,7 +67,10 @@ impl PackageManager for Apt {
             })?;
 
         if !update_output.status.success() {
-            debug!(manager = "apt", "apt-get update failed, continuing with install anyway");
+            debug!(
+                manager = "apt",
+                "apt-get update failed, continuing with install anyway"
+            );
         }
 
         // Install the package
@@ -76,7 +88,7 @@ impl PackageManager for Apt {
             return Err(BombadilError::PackageInstallFailed {
                 name: package.to_string(),
                 manager: "apt".to_string(),
-                cause: std::io::Error::new(std::io::ErrorKind::Other, stderr.to_string()),
+                cause: std::io::Error::other(stderr.to_string()),
             });
         }
 
@@ -101,7 +113,7 @@ impl PackageManager for Apt {
             return Err(BombadilError::PackageRemoveFailed {
                 name: package.to_string(),
                 manager: "apt".to_string(),
-                cause: std::io::Error::new(std::io::ErrorKind::Other, stderr.to_string()),
+                cause: std::io::Error::other(stderr.to_string()),
             });
         }
 
@@ -124,7 +136,7 @@ impl PackageManager for Apt {
             let stderr = String::from_utf8_lossy(&output.stderr);
             return Err(BombadilError::Io {
                 context: format!("dpkg-query failed: {}", stderr),
-                source: std::io::Error::new(std::io::ErrorKind::Other, stderr.to_string()),
+                source: std::io::Error::other(stderr.to_string()),
             });
         }
 
@@ -135,7 +147,11 @@ impl PackageManager for Apt {
             .map(|line| line.to_string())
             .collect();
 
-        debug!(manager = "apt", count = packages.len(), "Listed installed packages");
+        debug!(
+            manager = "apt",
+            count = packages.len(),
+            "Listed installed packages"
+        );
         Ok(packages)
     }
 }

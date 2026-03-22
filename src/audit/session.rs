@@ -70,9 +70,9 @@ impl SessionStats {
         match &action.action_type {
             ActionType::FileCreate { .. } => self.files_created += 1,
             ActionType::FileUpdate { .. } => self.files_updated += 1,
-            ActionType::FilePatch { .. } | ActionType::SemanticPatch { .. } | ActionType::Inject { .. } => {
-                self.files_patched += 1
-            }
+            ActionType::FilePatch { .. }
+            | ActionType::SemanticPatch { .. }
+            | ActionType::Inject { .. } => self.files_patched += 1,
             ActionType::SymlinkCreate { .. } => self.symlinks_created += 1,
             ActionType::SymlinkRemove { .. } => self.symlinks_removed += 1,
             ActionType::ConflictResolved { .. } => self.conflicts_resolved += 1,
@@ -124,7 +124,11 @@ impl SessionStats {
             parts.push(format!(
                 "{} conflict{} resolved",
                 self.conflicts_resolved,
-                if self.conflicts_resolved == 1 { "" } else { "s" }
+                if self.conflicts_resolved == 1 {
+                    ""
+                } else {
+                    "s"
+                }
             ));
         }
 

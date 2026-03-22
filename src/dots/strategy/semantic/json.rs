@@ -46,10 +46,12 @@ pub fn apply_patch(base: Value, patch: &SemanticPatch) -> Result<Value> {
             })?;
 
         let json_patch = json_patch::Patch(patch_ops);
-        json_patch::patch(&mut result, &json_patch).map_err(|e| BombadilError::PatchApplyFailed {
-            patch_file: PathBuf::new(),
-            base_file: PathBuf::new(),
-            help: format!("JSON Patch failed: {}", e),
+        json_patch::patch(&mut result, &json_patch).map_err(|e| {
+            BombadilError::PatchApplyFailed {
+                patch_file: PathBuf::new(),
+                base_file: PathBuf::new(),
+                help: format!("JSON Patch failed: {}", e),
+            }
         })?;
         debug!("Applied RFC 6902 JSON Patch operations");
     }
@@ -108,16 +110,19 @@ fn merge_at_path(base: &Value, path: &str, value: Value) -> Result<Value> {
         } else {
             // Navigate deeper
             current = match current {
-                Value::Object(map) => {
-                    map.entry(part.to_string())
-                        .or_insert(Value::Object(Map::new()))
-                }
+                Value::Object(map) => map
+                    .entry(part.to_string())
+                    .or_insert(Value::Object(Map::new())),
                 Value::Array(arr) => {
                     if let Ok(idx) = part.parse::<usize>() {
-                        arr.get_mut(idx).ok_or_else(|| BombadilError::ConfigInvalid {
-                            message: format!("Array index {} out of bounds at path {}", idx, path),
-                            help: None,
-                        })?
+                        arr.get_mut(idx)
+                            .ok_or_else(|| BombadilError::ConfigInvalid {
+                                message: format!(
+                                    "Array index {} out of bounds at path {}",
+                                    idx, path
+                                ),
+                                help: None,
+                            })?
                     } else {
                         return Err(BombadilError::ConfigInvalid {
                             message: format!("Invalid array index '{}' at path {}", part, path),
@@ -189,16 +194,23 @@ fn delete_at_path(base: &Value, path: &str) -> Result<Value> {
         } else {
             // Navigate deeper
             current = match current {
-                Value::Object(map) => map.get_mut(*part).ok_or_else(|| BombadilError::ConfigInvalid {
-                    message: format!("Path not found: {}", path),
-                    help: None,
-                })?,
-                Value::Array(arr) => {
-                    if let Ok(idx) = part.parse::<usize>() {
-                        arr.get_mut(idx).ok_or_else(|| BombadilError::ConfigInvalid {
-                            message: format!("Array index {} out of bounds at path {}", idx, path),
+                Value::Object(map) => {
+                    map.get_mut(*part)
+                        .ok_or_else(|| BombadilError::ConfigInvalid {
+                            message: format!("Path not found: {}", path),
                             help: None,
                         })?
+                }
+                Value::Array(arr) => {
+                    if let Ok(idx) = part.parse::<usize>() {
+                        arr.get_mut(idx)
+                            .ok_or_else(|| BombadilError::ConfigInvalid {
+                                message: format!(
+                                    "Array index {} out of bounds at path {}",
+                                    idx, path
+                                ),
+                                help: None,
+                            })?
                     } else {
                         return Err(BombadilError::ConfigInvalid {
                             message: format!("Invalid array index '{}' at path {}", part, path),
@@ -229,16 +241,20 @@ fn apply_array_op(base: &Value, path: &str, op: &ArrayOp) -> Result<Value> {
     // Navigate to the array
     for part in &parts {
         current = match current {
-            Value::Object(map) => map.get_mut(*part).ok_or_else(|| BombadilError::ConfigInvalid {
-                message: format!("Path not found: {}", path),
-                help: None,
-            })?,
-            Value::Array(arr) => {
-                if let Ok(idx) = part.parse::<usize>() {
-                    arr.get_mut(idx).ok_or_else(|| BombadilError::ConfigInvalid {
-                        message: format!("Array index {} out of bounds at path {}", idx, path),
+            Value::Object(map) => {
+                map.get_mut(*part)
+                    .ok_or_else(|| BombadilError::ConfigInvalid {
+                        message: format!("Path not found: {}", path),
                         help: None,
                     })?
+            }
+            Value::Array(arr) => {
+                if let Ok(idx) = part.parse::<usize>() {
+                    arr.get_mut(idx)
+                        .ok_or_else(|| BombadilError::ConfigInvalid {
+                            message: format!("Array index {} out of bounds at path {}", idx, path),
+                            help: None,
+                        })?
                 } else {
                     return Err(BombadilError::ConfigInvalid {
                         message: format!("Invalid array index '{}' at path {}", part, path),
@@ -265,18 +281,16 @@ fn apply_array_op(base: &Value, path: &str, op: &ArrayOp) -> Result<Value> {
                         _ => vec![op.value.clone()],
                     };
                 }
-                ArrayOpType::Append => {
-                    match &op.value {
-                        Value::Array(values) => arr.extend(values.clone()),
-                        v => arr.push(v.clone()),
-                    }
-                }
+                ArrayOpType::Append => match &op.value {
+                    Value::Array(values) => arr.extend(values.clone()),
+                    v => arr.push(v.clone()),
+                },
                 ArrayOpType::Prepend => {
                     let mut new_arr = match &op.value {
                         Value::Array(values) => values.clone(),
                         v => vec![v.clone()],
                     };
-                    new_arr.extend(arr.drain(..));
+                    new_arr.append(arr);
                     *arr = new_arr;
                 }
                 ArrayOpType::Remove => {
@@ -423,13 +437,19 @@ mod tests {
         });
 
         let mut merge = std::collections::HashMap::new();
-        merge.insert("/settings".to_string(), json!({"theme": "dark", "fontSize": 14}));
+        merge.insert(
+            "/settings".to_string(),
+            json!({"theme": "dark", "fontSize": 14}),
+        );
 
         let mut arrays = std::collections::HashMap::new();
-        arrays.insert("/plugins".to_string(), vec![ArrayOp {
-            operation: ArrayOpType::Append,
-            value: json!("c"),
-        }]);
+        arrays.insert(
+            "/plugins".to_string(),
+            vec![ArrayOp {
+                operation: ArrayOpType::Append,
+                value: json!("c"),
+            }],
+        );
 
         let patch = SemanticPatch {
             format: crate::config::SemanticFormat::Json,

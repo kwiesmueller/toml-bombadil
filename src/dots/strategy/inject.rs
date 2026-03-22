@@ -31,10 +31,13 @@ impl DotInstaller for InjectInstaller {
         dotfiles_dir: &Path,
         vars: &tera::Context,
     ) -> Result<InstallResult> {
-        let target = dot.target.as_ref().ok_or_else(|| BombadilError::ConfigInvalid {
-            message: "Dot missing target path".to_string(),
-            help: Some("Add a 'target' field to the dot configuration".to_string()),
-        })?;
+        let target = dot
+            .target
+            .as_ref()
+            .ok_or_else(|| BombadilError::ConfigInvalid {
+                message: "Dot missing target path".to_string(),
+                help: Some("Add a 'target' field to the dot configuration".to_string()),
+            })?;
 
         let target_path = resolve_path(target);
 
@@ -61,7 +64,12 @@ impl DotInstaller for InjectInstaller {
         let profiles: Vec<String> = vars
             .get("profiles")
             .and_then(|v| v.as_array())
-            .map(|arr| arr.iter().filter_map(|v| v.as_str()).map(String::from).collect())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str())
+                    .map(String::from)
+                    .collect()
+            })
             .unwrap_or_default();
 
         // Build new content
@@ -71,12 +79,8 @@ impl DotInstaller for InjectInstaller {
         if let Some(prepend_path) = &dot.prepend {
             let prepend_source = dotfiles_dir.join(prepend_path);
             if prepend_source.exists() {
-                let prepend_content = render::render_file(
-                    &prepend_source,
-                    &vars_map,
-                    &HashMap::new(),
-                    &profiles,
-                )?;
+                let prepend_content =
+                    render::render_file(&prepend_source, &vars_map, &HashMap::new(), &profiles)?;
 
                 new_content.push_str(&marker_start);
                 new_content.push('\n');
@@ -96,12 +100,8 @@ impl DotInstaller for InjectInstaller {
         if let Some(append_path) = &dot.append {
             let append_source = dotfiles_dir.join(append_path);
             if append_source.exists() {
-                let append_content = render::render_file(
-                    &append_source,
-                    &vars_map,
-                    &HashMap::new(),
-                    &profiles,
-                )?;
+                let append_content =
+                    render::render_file(&append_source, &vars_map, &HashMap::new(), &profiles)?;
 
                 if !new_content.ends_with('\n') {
                     new_content.push('\n');
@@ -324,9 +324,7 @@ user content
         };
 
         let installer = InjectInstaller;
-        let result = installer
-            .install(&full, dir.path(), &context)
-            .unwrap();
+        let result = installer.install(&full, dir.path(), &context).unwrap();
 
         assert_eq!(result, InstallResult::Created);
 
@@ -365,9 +363,7 @@ user content
         };
 
         let installer = InjectInstaller;
-        let result = installer
-            .install(&full, dir.path(), &context)
-            .unwrap();
+        let result = installer.install(&full, dir.path(), &context).unwrap();
 
         assert_eq!(result, InstallResult::Updated); // Existing file modified with managed section
 

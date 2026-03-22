@@ -136,7 +136,9 @@ impl ActionPlan {
         let mut map = std::collections::HashMap::new();
         for action in &self.actions {
             if let Some(path) = action.action_type.target_path() {
-                map.entry(path.clone()).or_insert_with(Vec::new).push(action);
+                map.entry(path.clone())
+                    .or_insert_with(Vec::new)
+                    .push(action);
             }
         }
         map
@@ -147,7 +149,9 @@ impl ActionPlan {
         let mut map = std::collections::HashMap::new();
         for action in &self.actions {
             if let Some(name) = &action.dot_name {
-                map.entry(name.clone()).or_insert_with(Vec::new).push(action);
+                map.entry(name.clone())
+                    .or_insert_with(Vec::new)
+                    .push(action);
             }
         }
         map

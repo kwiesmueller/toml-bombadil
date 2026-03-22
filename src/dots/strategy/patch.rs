@@ -6,7 +6,7 @@
 //! - `delete`: Remove lines matching a pattern
 
 use super::{DotInstaller, InstallResult};
-use crate::config::{resolve_path, Dot, LinePatch, LineSetOp, LineInsertOp, LineDeleteOp};
+use crate::config::{resolve_path, Dot, LineDeleteOp, LineInsertOp, LinePatch, LineSetOp};
 use crate::core::{BombadilError, Result};
 use crate::dots::render;
 use regex::Regex;
@@ -33,15 +33,23 @@ impl DotInstaller for PatchInstaller {
         dotfiles_dir: &Path,
         vars: &tera::Context,
     ) -> Result<InstallResult> {
-        let base_path = dot.base.as_ref().ok_or_else(|| BombadilError::ConfigInvalid {
-            message: "Patch strategy requires a 'base' field".to_string(),
-            help: Some("Add base = \"/path/to/base/file\" to your dot configuration".to_string()),
-        })?;
+        let base_path = dot
+            .base
+            .as_ref()
+            .ok_or_else(|| BombadilError::ConfigInvalid {
+                message: "Patch strategy requires a 'base' field".to_string(),
+                help: Some(
+                    "Add base = \"/path/to/base/file\" to your dot configuration".to_string(),
+                ),
+            })?;
 
-        let target = dot.target.as_ref().ok_or_else(|| BombadilError::ConfigInvalid {
-            message: "Dot missing target path".to_string(),
-            help: Some("Add a 'target' field to the dot configuration".to_string()),
-        })?;
+        let target = dot
+            .target
+            .as_ref()
+            .ok_or_else(|| BombadilError::ConfigInvalid {
+                message: "Dot missing target path".to_string(),
+                help: Some("Add a 'target' field to the dot configuration".to_string()),
+            })?;
 
         // Resolve paths
         let base_path = resolve_path(base_path);
@@ -54,9 +62,7 @@ impl DotInstaller for PatchInstaller {
                 source: e,
             })?
         } else {
-            return Err(BombadilError::PatchBaseNotFound {
-                path: base_path,
-            });
+            return Err(BombadilError::PatchBaseNotFound { path: base_path });
         };
 
         // Load and apply patches
@@ -67,24 +73,36 @@ impl DotInstaller for PatchInstaller {
         let profiles: Vec<String> = vars
             .get("profiles")
             .and_then(|v| v.as_array())
-            .map(|arr| arr.iter().filter_map(|v| v.as_str()).map(String::from).collect())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str())
+                    .map(String::from)
+                    .collect()
+            })
             .unwrap_or_default();
 
         let patched = self.apply_patches(&base_content, &patches, &vars_map, &profiles)?;
 
         // Write to .dots directory
-        let source_name = dot.source.as_ref()
+        let source_name = dot
+            .source
+            .as_ref()
             .map(|p| p.to_string_lossy().to_string())
-            .unwrap_or_else(|| target.file_name()
-                .map(|n| n.to_string_lossy().to_string())
-                .unwrap_or_else(|| "patched".to_string()));
+            .unwrap_or_else(|| {
+                target
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_else(|| "patched".to_string())
+            });
 
         let dots_dir = dotfiles_dir.join(".dots");
         let copy_path = dots_dir.join(&source_name);
 
-        fs::create_dir_all(copy_path.parent().unwrap_or(&dots_dir)).map_err(|e| BombadilError::Io {
-            context: format!("creating .dots directory"),
-            source: e,
+        fs::create_dir_all(copy_path.parent().unwrap_or(&dots_dir)).map_err(|e| {
+            BombadilError::Io {
+                context: "creating .dots directory".to_string(),
+                source: e,
+            }
         })?;
 
         // Check if content changed
@@ -129,7 +147,8 @@ impl PatchInstaller {
                     })?
                     .filter_map(|e| e.ok())
                     .filter(|e| {
-                        e.path().extension()
+                        e.path()
+                            .extension()
                             .map(|ext| ext == "toml")
                             .unwrap_or(false)
                     })
@@ -148,7 +167,12 @@ impl PatchInstaller {
         // Load from source if specified (single patch file)
         if let Some(source) = &dot.source {
             let source_path = dotfiles_dir.join(source);
-            if source_path.exists() && source_path.extension().map(|e| e == "toml").unwrap_or(false) {
+            if source_path.exists()
+                && source_path
+                    .extension()
+                    .map(|e| e == "toml")
+                    .unwrap_or(false)
+            {
                 let patch = self.load_patch_file(&source_path)?;
                 patches.push(patch);
             }
@@ -257,10 +281,11 @@ impl PatchInstaller {
         let new_lines: Vec<String> = rendered_lines.lines().map(String::from).collect();
 
         if let Some(after_pattern) = &op.after {
-            let regex = Regex::new(after_pattern).map_err(|e| BombadilError::PatchInvalidFormat {
-                path: PathBuf::new(),
-                help: format!("Invalid regex pattern '{}': {}", after_pattern, e),
-            })?;
+            let regex =
+                Regex::new(after_pattern).map_err(|e| BombadilError::PatchInvalidFormat {
+                    path: PathBuf::new(),
+                    help: format!("Invalid regex pattern '{}': {}", after_pattern, e),
+                })?;
 
             // Find and insert after matching lines (reverse to preserve indices)
             let matches: Vec<usize> = lines
@@ -279,10 +304,11 @@ impl PatchInstaller {
         }
 
         if let Some(before_pattern) = &op.before {
-            let regex = Regex::new(before_pattern).map_err(|e| BombadilError::PatchInvalidFormat {
-                path: PathBuf::new(),
-                help: format!("Invalid regex pattern '{}': {}", before_pattern, e),
-            })?;
+            let regex =
+                Regex::new(before_pattern).map_err(|e| BombadilError::PatchInvalidFormat {
+                    path: PathBuf::new(),
+                    help: format!("Invalid regex pattern '{}': {}", before_pattern, e),
+                })?;
 
             // Find and insert before matching lines (reverse to preserve indices)
             let matches: Vec<usize> = lines
@@ -293,7 +319,7 @@ impl PatchInstaller {
                 .collect();
 
             for idx in matches.into_iter().rev() {
-                for (_offset, new_line) in new_lines.iter().rev().enumerate() {
+                for new_line in new_lines.iter().rev() {
                     lines.insert(idx, new_line.clone());
                 }
                 debug!(pattern = %before_pattern, "Applied insert-before operation");
@@ -389,8 +415,16 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
 
-    fn create_test_patch(set: Vec<LineSetOp>, insert: Vec<LineInsertOp>, delete: Vec<LineDeleteOp>) -> LinePatch {
-        LinePatch { set, insert, delete }
+    fn create_test_patch(
+        set: Vec<LineSetOp>,
+        insert: Vec<LineInsertOp>,
+        delete: Vec<LineDeleteOp>,
+    ) -> LinePatch {
+        LinePatch {
+            set,
+            insert,
+            delete,
+        }
     }
 
     #[test]
@@ -407,7 +441,9 @@ mod tests {
             value: "key = new_value".to_string(),
         };
 
-        installer.apply_set(&mut lines, &op, &HashMap::new(), &[]).unwrap();
+        installer
+            .apply_set(&mut lines, &op, &HashMap::new(), &[])
+            .unwrap();
 
         assert_eq!(lines[1], "key = new_value");
     }
@@ -415,10 +451,7 @@ mod tests {
     #[test]
     fn apply_insert_after() {
         let installer = PatchInstaller;
-        let mut lines = vec![
-            "[section]".to_string(),
-            "key = value".to_string(),
-        ];
+        let mut lines = vec!["[section]".to_string(), "key = value".to_string()];
 
         let op = LineInsertOp {
             after: Some(r"^\[section\]$".to_string()),
@@ -426,7 +459,9 @@ mod tests {
             lines: "new_key = new_value".to_string(),
         };
 
-        installer.apply_insert(&mut lines, &op, &HashMap::new(), &[]).unwrap();
+        installer
+            .apply_insert(&mut lines, &op, &HashMap::new(), &[])
+            .unwrap();
 
         assert_eq!(lines.len(), 3);
         assert_eq!(lines[1], "new_key = new_value");
@@ -435,10 +470,7 @@ mod tests {
     #[test]
     fn apply_insert_before() {
         let installer = PatchInstaller;
-        let mut lines = vec![
-            "[section]".to_string(),
-            "key = value".to_string(),
-        ];
+        let mut lines = vec!["[section]".to_string(), "key = value".to_string()];
 
         let op = LineInsertOp {
             after: None,
@@ -446,7 +478,9 @@ mod tests {
             lines: "# Comment for key".to_string(),
         };
 
-        installer.apply_insert(&mut lines, &op, &HashMap::new(), &[]).unwrap();
+        installer
+            .apply_insert(&mut lines, &op, &HashMap::new(), &[])
+            .unwrap();
 
         assert_eq!(lines.len(), 3);
         assert_eq!(lines[1], "# Comment for key");
@@ -501,7 +535,9 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let patch_file = dir.path().join("test.toml");
 
-        fs::write(&patch_file, r#"
+        fs::write(
+            &patch_file,
+            r#"
             [[set]]
             match = "^old_value$"
             value = "new_value"
@@ -512,7 +548,9 @@ mod tests {
 
             [[delete]]
             match = "^remove_me$"
-        "#).unwrap();
+        "#,
+        )
+        .unwrap();
 
         let installer = PatchInstaller;
         let patch = installer.load_patch_file(&patch_file).unwrap();

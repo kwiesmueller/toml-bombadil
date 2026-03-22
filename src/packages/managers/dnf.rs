@@ -23,7 +23,10 @@ impl PackageManager for Dnf {
 
     fn is_available(&self) -> bool {
         let available = command_exists("dnf");
-        debug!(manager = "dnf", available, "Checking package manager availability");
+        debug!(
+            manager = "dnf",
+            available, "Checking package manager availability"
+        );
         available
     }
 
@@ -34,12 +37,18 @@ impl PackageManager for Dnf {
             .args(["-q", package])
             .output()
             .map_err(|e| BombadilError::Io {
-                context: format!("Failed to check if package '{}' is installed via rpm", package),
+                context: format!(
+                    "Failed to check if package '{}' is installed via rpm",
+                    package
+                ),
                 source: e,
             })?;
 
         let installed = output.status.success();
-        debug!(manager = "dnf", package, installed, "Package installation check complete");
+        debug!(
+            manager = "dnf",
+            package, installed, "Package installation check complete"
+        );
 
         Ok(installed)
     }
@@ -61,7 +70,7 @@ impl PackageManager for Dnf {
             return Err(BombadilError::PackageInstallFailed {
                 name: package.to_string(),
                 manager: "dnf".to_string(),
-                cause: std::io::Error::new(std::io::ErrorKind::Other, stderr.to_string()),
+                cause: std::io::Error::other(stderr.to_string()),
             });
         }
 
@@ -86,7 +95,7 @@ impl PackageManager for Dnf {
             return Err(BombadilError::PackageRemoveFailed {
                 name: package.to_string(),
                 manager: "dnf".to_string(),
-                cause: std::io::Error::new(std::io::ErrorKind::Other, stderr.to_string()),
+                cause: std::io::Error::other(stderr.to_string()),
             });
         }
 
@@ -109,7 +118,7 @@ impl PackageManager for Dnf {
             let stderr = String::from_utf8_lossy(&output.stderr);
             return Err(BombadilError::Io {
                 context: format!("rpm -qa failed: {}", stderr),
-                source: std::io::Error::new(std::io::ErrorKind::Other, stderr.to_string()),
+                source: std::io::Error::other(stderr.to_string()),
             });
         }
 
@@ -120,7 +129,11 @@ impl PackageManager for Dnf {
             .map(|line| line.to_string())
             .collect();
 
-        debug!(manager = "dnf", count = packages.len(), "Listed installed packages");
+        debug!(
+            manager = "dnf",
+            count = packages.len(),
+            "Listed installed packages"
+        );
         Ok(packages)
     }
 }

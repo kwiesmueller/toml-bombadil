@@ -23,23 +23,35 @@ impl PackageManager for Pacman {
 
     fn is_available(&self) -> bool {
         let available = command_exists("pacman");
-        debug!(manager = "pacman", available, "Checking package manager availability");
+        debug!(
+            manager = "pacman",
+            available, "Checking package manager availability"
+        );
         available
     }
 
     fn is_installed(&self, package: &str) -> Result<bool> {
-        debug!(manager = "pacman", package, "Checking if package is installed");
+        debug!(
+            manager = "pacman",
+            package, "Checking if package is installed"
+        );
 
         let output = Command::new("pacman")
             .args(["-Q", package])
             .output()
             .map_err(|e| BombadilError::Io {
-                context: format!("Failed to check if package '{}' is installed via pacman", package),
+                context: format!(
+                    "Failed to check if package '{}' is installed via pacman",
+                    package
+                ),
                 source: e,
             })?;
 
         let installed = output.status.success();
-        debug!(manager = "pacman", package, installed, "Package installation check complete");
+        debug!(
+            manager = "pacman",
+            package, installed, "Package installation check complete"
+        );
 
         Ok(installed)
     }
@@ -61,11 +73,14 @@ impl PackageManager for Pacman {
             return Err(BombadilError::PackageInstallFailed {
                 name: package.to_string(),
                 manager: "pacman".to_string(),
-                cause: std::io::Error::new(std::io::ErrorKind::Other, stderr.to_string()),
+                cause: std::io::Error::other(stderr.to_string()),
             });
         }
 
-        debug!(manager = "pacman", package, "Package installed successfully");
+        debug!(
+            manager = "pacman",
+            package, "Package installed successfully"
+        );
         Ok(())
     }
 
@@ -86,7 +101,7 @@ impl PackageManager for Pacman {
             return Err(BombadilError::PackageRemoveFailed {
                 name: package.to_string(),
                 manager: "pacman".to_string(),
-                cause: std::io::Error::new(std::io::ErrorKind::Other, stderr.to_string()),
+                cause: std::io::Error::other(stderr.to_string()),
             });
         }
 
@@ -97,19 +112,20 @@ impl PackageManager for Pacman {
     fn list_installed(&self) -> Result<Vec<String>> {
         debug!(manager = "pacman", "Listing installed packages");
 
-        let output = Command::new("pacman")
-            .args(["-Qq"])
-            .output()
-            .map_err(|e| BombadilError::Io {
-                context: "Failed to list installed packages via pacman".to_string(),
-                source: e,
-            })?;
+        let output =
+            Command::new("pacman")
+                .args(["-Qq"])
+                .output()
+                .map_err(|e| BombadilError::Io {
+                    context: "Failed to list installed packages via pacman".to_string(),
+                    source: e,
+                })?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
             return Err(BombadilError::Io {
                 context: format!("pacman -Qq failed: {}", stderr),
-                source: std::io::Error::new(std::io::ErrorKind::Other, stderr.to_string()),
+                source: std::io::Error::other(stderr.to_string()),
             });
         }
 
@@ -120,7 +136,11 @@ impl PackageManager for Pacman {
             .map(|line| line.to_string())
             .collect();
 
-        debug!(manager = "pacman", count = packages.len(), "Listed installed packages");
+        debug!(
+            manager = "pacman",
+            count = packages.len(),
+            "Listed installed packages"
+        );
         Ok(packages)
     }
 }

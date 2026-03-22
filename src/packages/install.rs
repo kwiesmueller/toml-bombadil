@@ -11,20 +11,27 @@ use std::path::Path;
 
 /// Run a command with arguments, waiting for it to finish.
 pub fn run_command(cmd: &str, args: &[&str]) -> Result<()> {
-    let status = std::process::Command::new(cmd)
-        .args(args)
-        .status()?;
+    let status = std::process::Command::new(cmd).args(args).status()?;
     if status.success() {
         Ok(())
     } else {
-        bail!("command `{} {}` failed with status {}", cmd, args.join(" "), status)
+        bail!(
+            "command `{} {}` failed with status {}",
+            cmd,
+            args.join(" "),
+            status
+        )
     }
 }
 
 /// Run two commands piped together.
 pub fn run_command_piped(cmd1: &[&str], cmd2: &[&str]) -> Result<()> {
-    let (c1, a1) = cmd1.split_first().ok_or_else(|| anyhow::anyhow!("empty command"))?;
-    let (c2, a2) = cmd2.split_first().ok_or_else(|| anyhow::anyhow!("empty command"))?;
+    let (c1, a1) = cmd1
+        .split_first()
+        .ok_or_else(|| anyhow::anyhow!("empty command"))?;
+    let (c2, a2) = cmd2
+        .split_first()
+        .ok_or_else(|| anyhow::anyhow!("empty command"))?;
 
     let child1 = std::process::Command::new(c1)
         .args(a1)

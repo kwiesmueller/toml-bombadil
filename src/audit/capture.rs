@@ -115,8 +115,10 @@ impl Visit for FieldVisitor {
         if field.name() == "message" {
             self.message = Some(value_str);
         } else {
-            self.fields
-                .insert(field.name().to_string(), serde_json::Value::String(value_str));
+            self.fields.insert(
+                field.name().to_string(),
+                serde_json::Value::String(value_str),
+            );
         }
     }
 
@@ -233,7 +235,7 @@ pub fn format_captured_traces(traces: &[CapturedTrace]) -> String {
             format!("[{}] ", trace.span_path.join("::"))
         };
 
-        let fields_str = if trace.fields.as_object().map_or(true, |m| m.is_empty()) {
+        let fields_str = if trace.fields.as_object().is_none_or(|m| m.is_empty()) {
             String::new()
         } else {
             format!(" {}", trace.fields)

@@ -85,6 +85,8 @@ mod tests {
 
     #[test]
     fn test_command_exists_with_nonexistent_command() {
-        assert!(!command_exists("this_command_definitely_does_not_exist_12345"));
+        assert!(!command_exists(
+            "this_command_definitely_does_not_exist_12345"
+        ));
     }
 }

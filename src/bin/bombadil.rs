@@ -25,11 +25,12 @@ use toml_bombadil::audit::{
     generate_diff_from_storage, print_legend, ActionId, AuditStorage, FileRevertOptions,
     RevertEngine,
 };
-use toml_bombadil::config::{generate_schema, generate_patch_schema, generate_semantic_patch_schema};
+use toml_bombadil::config::{
+    generate_patch_schema, generate_schema, generate_semantic_patch_schema,
+};
 use toml_bombadil::packages::drift::DriftReport;
 use toml_bombadil::packages::managers::{
-    apt::Apt, brew::Brew, cargo::Cargo,
-    dnf::Dnf, flatpak::Flatpak, pacman::Pacman,
+    apt::Apt, brew::Brew, cargo::Cargo, dnf::Dnf, flatpak::Flatpak, pacman::Pacman,
     PackageManager as PackageManagerTrait,
 };
 
@@ -68,7 +69,10 @@ fn get_dotfiles_path() -> Result<PathBuf> {
         .map_err(|e| anyhow::anyhow!("Failed to find config: {}", e))?;
     let config = toml_bombadil::config::load_config_resolved(&config_path)
         .map_err(|e| anyhow::anyhow!("Failed to load config: {}", e))?;
-    Ok(toml_bombadil::config::resolve_dotfiles_dir(&config, &config_path))
+    Ok(toml_bombadil::config::resolve_dotfiles_dir(
+        &config,
+        &config_path,
+    ))
 }
 
 /// Toml is a dotfile template manager, written in rust.
@@ -156,7 +160,7 @@ enum Cli {
     ///
     /// Replaces `link` and `packages sync`. Reads the active profile from
     /// `.active_profile` in the dotfiles directory (written by `bombadil init`).
-    BombadilSync {
+    Sync {
         /// Show plan without executing
         #[clap(long)]
         dry_run: bool,
@@ -420,8 +424,7 @@ async fn main() -> Result<()> {
             dry_run,
             review,
         } => {
-            let mut bombadil =
-                Bombadil::load(Mode::Gpg).unwrap_or_else(|err| fatal!("{}", err));
+            let mut bombadil = Bombadil::load(Mode::Gpg).unwrap_or_else(|err| fatal!("{}", err));
 
             bombadil
                 .enable_profiles_v4(profiles.iter().map(String::as_str).collect())
@@ -460,7 +463,7 @@ async fn main() -> Result<()> {
             // Display session summary
             toml_bombadil::audit::print_session_summary(&session);
         }
-        Cli::BombadilSync {
+        Cli::Sync {
             dry_run,
             tags,
             only_dots,
@@ -469,8 +472,8 @@ async fn main() -> Result<()> {
         } => {
             use toml_bombadil::sync::{SyncEngine, SyncOptions};
 
-            let config_path = toml_bombadil::config::config_path()
-                .unwrap_or_else(|err| fatal!("{}", err));
+            let config_path =
+                toml_bombadil::config::config_path().unwrap_or_else(|err| fatal!("{}", err));
 
             // Read active profile from .active_profile file
             let dotfiles_dir = {
@@ -498,7 +501,9 @@ async fn main() -> Result<()> {
             };
 
             let engine = SyncEngine::new(&config_path);
-            let plan = engine.plan(&options).unwrap_or_else(|err| fatal!("{}", err));
+            let plan = engine
+                .plan(&options)
+                .unwrap_or_else(|err| fatal!("{}", err));
 
             if dry_run {
                 // Print plan summary
@@ -618,10 +623,7 @@ async fn main() -> Result<()> {
             // Get the dotfiles path - either from argument or from settings
             let dotfiles_path = match path {
                 Some(p) => p,
-                None => {
-                    get_dotfiles_path()
-                        .unwrap_or_else(|err| fatal!("{}", err))
-                }
+                None => get_dotfiles_path().unwrap_or_else(|err| fatal!("{}", err)),
             };
 
             let report =
@@ -636,7 +638,10 @@ async fn main() -> Result<()> {
         Cli::Packages { command } => {
             handle_packages_command(command).unwrap_or_else(|err| fatal!("{}", err));
         }
-        Cli::Schema { schema_type, output } => {
+        Cli::Schema {
+            schema_type,
+            output,
+        } => {
             let schema = match schema_type {
                 SchemaType::Config => generate_schema(),
                 SchemaType::Patch => generate_patch_schema(),
@@ -648,8 +653,9 @@ async fn main() -> Result<()> {
 
             match output {
                 Some(path) => {
-                    std::fs::write(&path, &json)
-                        .unwrap_or_else(|err| fatal!("Failed to write schema to {}: {}", path.display(), err));
+                    std::fs::write(&path, &json).unwrap_or_else(|err| {
+                        fatal!("Failed to write schema to {}: {}", path.display(), err)
+                    });
                     println!("{} Schema written to {}", "✓".green(), path.display());
                 }
                 None => {
@@ -657,7 +663,10 @@ async fn main() -> Result<()> {
                 }
             }
         }
-        Cli::Drift { show_extra, profiles: _profiles } => {
+        Cli::Drift {
+            show_extra,
+            profiles: _profiles,
+        } => {
             // Load v4 config
             let config = toml_bombadil::config::load_config()
                 .unwrap_or_else(|err| fatal!("Failed to load config: {}", err));
@@ -687,11 +696,17 @@ async fn main() -> Result<()> {
                 std::process::exit(1);
             }
         }
-        Cli::Log { limit, file, dot, verbose } => {
+        Cli::Log {
+            limit,
+            file,
+            dot,
+            verbose,
+        } => {
             let dotfiles_path = get_dotfiles_path().unwrap_or_else(|err| fatal!("{}", err));
             let storage = AuditStorage::new(&dotfiles_path);
 
-            let sessions = storage.list_sessions()
+            let sessions = storage
+                .list_sessions()
                 .unwrap_or_else(|err| fatal!("Failed to read sessions: {}", err));
 
             if sessions.is_empty() {
@@ -709,7 +724,8 @@ async fn main() -> Result<()> {
                 // Filter by file if specified
                 if let Some(ref file_filter) = file {
                     let has_matching_action = session.actions.iter().any(|a| {
-                        a.action_type.target_path()
+                        a.action_type
+                            .target_path()
                             .map(|p| p == file_filter)
                             .unwrap_or(false)
                     });
@@ -720,9 +736,10 @@ async fn main() -> Result<()> {
 
                 // Filter by dot if specified
                 if let Some(ref dot_filter) = dot {
-                    let has_matching_action = session.actions.iter().any(|a| {
-                        a.dot_name.as_ref() == Some(dot_filter)
-                    });
+                    let has_matching_action = session
+                        .actions
+                        .iter()
+                        .any(|a| a.dot_name.as_ref() == Some(dot_filter));
                     if !has_matching_action {
                         continue;
                     }
@@ -748,13 +765,20 @@ async fn main() -> Result<()> {
 
             print_legend();
         }
-        Cli::Inspect { action_id, view, file, diff: show_diff, log: show_log } => {
+        Cli::Inspect {
+            action_id,
+            view,
+            file,
+            diff: show_diff,
+            log: show_log,
+        } => {
             let dotfiles_path = get_dotfiles_path().unwrap_or_else(|err| fatal!("{}", err));
             let storage = AuditStorage::new(&dotfiles_path);
 
             // File history mode
             if let Some(file_path) = file {
-                let file_index = storage.load_file_index()
+                let file_index = storage
+                    .load_file_index()
                     .unwrap_or_else(|err| fatal!("Failed to load file index: {}", err));
 
                 let file_actions = match file_index.get(&file_path) {
@@ -768,16 +792,20 @@ async fn main() -> Result<()> {
                 // Build the enriched action list with full Action and Session data
                 let mut enriched_actions = Vec::new();
                 for file_action in &file_actions {
-                    let session = storage.find_session_for_action(&file_action.action_id)
+                    let session = storage
+                        .find_session_for_action(&file_action.action_id)
                         .ok()
                         .flatten();
-                    let action = session.as_ref().and_then(|s| s.get_action(&file_action.action_id));
+                    let action = session
+                        .as_ref()
+                        .and_then(|s| s.get_action(&file_action.action_id));
                     enriched_actions.push((file_action.clone(), action.cloned(), session));
                 }
 
                 let history = format_file_history(
                     &file_path,
-                    &enriched_actions.iter()
+                    &enriched_actions
+                        .iter()
                         .map(|(fa, a, s)| (fa.clone(), a.as_ref(), s.as_ref()))
                         .collect::<Vec<_>>(),
                     show_diff,
@@ -790,7 +818,8 @@ async fn main() -> Result<()> {
             // Single action mode
             let action_id_str = action_id.expect("action_id required when --file not specified");
             let action_id = ActionId::from_string(&action_id_str);
-            let session = storage.find_session_for_action(&action_id)
+            let session = storage
+                .find_session_for_action(&action_id)
                 .unwrap_or_else(|err| fatal!("Failed to find action: {}", err));
 
             let session = match session {
@@ -798,13 +827,15 @@ async fn main() -> Result<()> {
                 None => fatal!("Action '{}' not found", action_id),
             };
 
-            let action = session.get_action(&action_id)
+            let action = session
+                .get_action(&action_id)
                 .expect("Action should exist in session");
 
             // Show logs if requested
             if show_log {
                 if storage.has_logs(&action_id) {
-                    let logs = storage.load_logs(&action_id)
+                    let logs = storage
+                        .load_logs(&action_id)
                         .unwrap_or_else(|err| fatal!("Failed to load logs: {}", err));
                     // Try to parse as structured traces first, fall back to raw text
                     match toml_bombadil::audit::deserialize_traces(&logs) {
@@ -829,15 +860,13 @@ async fn main() -> Result<()> {
                 InspectView::Details => {
                     println!("{}", format_action_details(action));
                 }
-                InspectView::Diff => {
-                    match generate_diff_from_storage(&storage, action) {
-                        Some(diff) => println!("{}", diff),
-                        None => {
-                            println!("{}", "No diff available for this action.".yellow());
-                            println!("Diff is only available for file update/patch actions.");
-                        }
+                InspectView::Diff => match generate_diff_from_storage(&storage, action) {
+                    Some(diff) => println!("{}", diff),
+                    None => {
+                        println!("{}", "No diff available for this action.".yellow());
+                        println!("Diff is only available for file update/patch actions.");
                     }
-                }
+                },
                 InspectView::Content => {
                     println!("{}", "Before:".bold());
                     match storage.load_before_content(&action_id) {
@@ -859,13 +888,21 @@ async fn main() -> Result<()> {
                 }
             }
         }
-        Cli::Revert { action_id, force, dry_run, file, to, continue_on_error } => {
+        Cli::Revert {
+            action_id,
+            force,
+            dry_run,
+            file,
+            to,
+            continue_on_error,
+        } => {
             let dotfiles_path = get_dotfiles_path().unwrap_or_else(|err| fatal!("{}", err));
             let storage = AuditStorage::new(&dotfiles_path);
 
             // File revert mode
             if let Some(file_path) = file {
-                let file_index = storage.load_file_index()
+                let file_index = storage
+                    .load_file_index()
                     .unwrap_or_else(|err| fatal!("Failed to load file index: {}", err));
 
                 let engine = RevertEngine::with_file_index(storage, file_index);
@@ -874,7 +911,7 @@ async fn main() -> Result<()> {
                     force,
                     dry_run,
                     continue_on_error,
-                    to_action_id: to.map(|s| ActionId::from_string(s)),
+                    to_action_id: to.map(ActionId::from_string),
                 };
 
                 if dry_run {
@@ -888,10 +925,12 @@ async fn main() -> Result<()> {
                 }
 
                 let results = if let Some(ref to_id) = options.to_action_id {
-                    engine.revert_file_to(&file_path, to_id, options.clone())
+                    engine
+                        .revert_file_to(&file_path, to_id, options.clone())
                         .unwrap_or_else(|err| fatal!("File revert failed: {}", err))
                 } else {
-                    engine.revert_file(&file_path, options)
+                    engine
+                        .revert_file(&file_path, options)
                         .unwrap_or_else(|err| fatal!("File revert failed: {}", err))
                 };
 
@@ -929,7 +968,8 @@ async fn main() -> Result<()> {
             // Single action revert mode
             let action_id_str = action_id.expect("action_id required when --file not specified");
             let action_id = ActionId::from_string(&action_id_str);
-            let session = storage.find_session_for_action(&action_id)
+            let session = storage
+                .find_session_for_action(&action_id)
                 .unwrap_or_else(|err| fatal!("Failed to find action: {}", err));
 
             let session = match session {
@@ -937,7 +977,8 @@ async fn main() -> Result<()> {
                 None => fatal!("Action '{}' not found", action_id),
             };
 
-            let action = session.get_action(&action_id)
+            let action = session
+                .get_action(&action_id)
                 .expect("Action should exist in session");
 
             if dry_run {
@@ -961,27 +1002,38 @@ async fn main() -> Result<()> {
                         println!("  Status: {} - {}", "Cannot revert".red(), reason);
                     }
                     toml_bombadil::audit::RevertCheck::ModifiedSinceAction { .. } => {
-                        println!("  Status: {} (use --force to override)", "File modified since action".yellow());
+                        println!(
+                            "  Status: {} (use --force to override)",
+                            "File modified since action".yellow()
+                        );
                     }
                 }
                 return Ok(());
             }
 
             let engine = RevertEngine::new(storage);
-            let result = engine.revert(action, force)
+            let result = engine
+                .revert(action, force)
                 .unwrap_or_else(|err| fatal!("Revert failed: {}", err));
 
             if result.success {
                 println!("{} {}", "✓".green(), result.message);
                 if result.modified_warning {
-                    println!("{}: File was modified after the action, forced revert.", "Warning".yellow());
+                    println!(
+                        "{}: File was modified after the action, forced revert.",
+                        "Warning".yellow()
+                    );
                 }
             } else {
                 println!("{} {}", "✗".red(), result.message);
                 std::process::exit(1);
             }
         }
-        Cli::Migrate { dotfiles_dir, output, dry_run } => {
+        Cli::Migrate {
+            dotfiles_dir,
+            output,
+            dry_run,
+        } => {
             let out_dir = output.unwrap_or_else(|| dotfiles_dir.clone());
             match toml_bombadil::migrate::migrate(&dotfiles_dir, &out_dir, dry_run) {
                 Ok(report) => report.print(),

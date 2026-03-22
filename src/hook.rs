@@ -50,12 +50,12 @@ impl Hook {
 
         let stdout: Vec<String> = BufReader::new(child.stdout.take().unwrap())
             .lines()
-            .filter_map(|line| line.ok())
+            .map_while(Result::ok)
             .collect();
 
         let stderr: Vec<String> = BufReader::new(child.stderr.take().unwrap())
             .lines()
-            .filter_map(|line| line.ok())
+            .map_while(Result::ok)
             .collect();
 
         let exit_code = child.wait()?.code().unwrap_or(-1);

@@ -18,6 +18,7 @@ use std::path::PathBuf;
 ///
 /// This is the structure of `bombadil.toml`.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Default)]
 pub struct Config {
     /// Path to the dotfiles directory (relative to config file or absolute).
     #[serde(default)]
@@ -40,17 +41,6 @@ pub struct Config {
     pub import: Vec<PathBuf>,
 }
 
-impl Default for Config {
-    fn default() -> Self {
-        Self {
-            dotfiles_dir: None,
-            gpg_user_id: None,
-            settings: Settings::default(),
-            profiles: HashMap::new(),
-            import: Vec::new(),
-        }
-    }
-}
 
 /// Main settings section containing dots, packages, hooks, and variables.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
@@ -814,10 +804,7 @@ mod tests {
         let dot_file: DotFile = toml::from_str(toml).unwrap();
         assert_eq!(dot_file.dot.name.as_deref(), Some("zsh"));
         assert_eq!(dot_file.dot.files.len(), 2);
-        assert_eq!(
-            dot_file.dot.files["zshrc"].target_path(),
-            "~/.zshrc"
-        );
+        assert_eq!(dot_file.dot.files["zshrc"].target_path(), "~/.zshrc");
     }
 
     #[test]
@@ -857,7 +844,13 @@ mod tests {
         assert_eq!(dot_file.dot.prehooks, vec!["mkdir -p ~/.local/share/nvim"]);
         let nvim_pkg = &dot_file.dot.packages["neovim"];
         assert_eq!(
-            nvim_pkg.install.as_ref().unwrap().dnf.as_ref().map(|d| d.package_name()),
+            nvim_pkg
+                .install
+                .as_ref()
+                .unwrap()
+                .dnf
+                .as_ref()
+                .map(|d| d.package_name()),
             Some("neovim")
         );
         assert_eq!(nvim_pkg.posthooks.len(), 1);

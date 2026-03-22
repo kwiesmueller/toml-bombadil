@@ -23,19 +23,28 @@ impl PackageManager for Cargo {
 
     fn is_available(&self) -> bool {
         let available = command_exists("cargo");
-        debug!(manager = "cargo", available, "Checking package manager availability");
+        debug!(
+            manager = "cargo",
+            available, "Checking package manager availability"
+        );
         available
     }
 
     fn is_installed(&self, package: &str) -> Result<bool> {
-        debug!(manager = "cargo", package, "Checking if package is installed");
+        debug!(
+            manager = "cargo",
+            package, "Checking if package is installed"
+        );
 
         // Use cargo install --list to check for installed packages
         let output = Command::new("cargo")
             .args(["install", "--list"])
             .output()
             .map_err(|e| BombadilError::Io {
-                context: format!("Failed to check if crate '{}' is installed via cargo", package),
+                context: format!(
+                    "Failed to check if crate '{}' is installed via cargo",
+                    package
+                ),
                 source: e,
             })?;
 
@@ -49,21 +58,22 @@ impl PackageManager for Cargo {
         // package_name v1.0.0:
         //     binary_name
         // The package name is at the start of a line followed by a version
-        let installed = stdout
-            .lines()
-            .any(|line| {
-                let trimmed = line.trim();
-                // Lines starting without whitespace are package entries
-                if line.starts_with(char::is_whitespace) {
-                    return false;
-                }
-                // Check if the line starts with the package name
-                trimmed.starts_with(package) &&
-                    (trimmed.len() == package.len() ||
-                     trimmed.chars().nth(package.len()) == Some(' '))
-            });
+        let installed = stdout.lines().any(|line| {
+            let trimmed = line.trim();
+            // Lines starting without whitespace are package entries
+            if line.starts_with(char::is_whitespace) {
+                return false;
+            }
+            // Check if the line starts with the package name
+            trimmed.starts_with(package)
+                && (trimmed.len() == package.len()
+                    || trimmed.chars().nth(package.len()) == Some(' '))
+        });
 
-        debug!(manager = "cargo", package, installed, "Package installation check complete");
+        debug!(
+            manager = "cargo",
+            package, installed, "Package installation check complete"
+        );
         Ok(installed)
     }
 
@@ -84,7 +94,7 @@ impl PackageManager for Cargo {
             return Err(BombadilError::PackageInstallFailed {
                 name: package.to_string(),
                 manager: "cargo".to_string(),
-                cause: std::io::Error::new(std::io::ErrorKind::Other, stderr.to_string()),
+                cause: std::io::Error::other(stderr.to_string()),
             });
         }
 
@@ -109,7 +119,7 @@ impl PackageManager for Cargo {
             return Err(BombadilError::PackageRemoveFailed {
                 name: package.to_string(),
                 manager: "cargo".to_string(),
-                cause: std::io::Error::new(std::io::ErrorKind::Other, stderr.to_string()),
+                cause: std::io::Error::other(stderr.to_string()),
             });
         }
 
@@ -132,7 +142,7 @@ impl PackageManager for Cargo {
             let stderr = String::from_utf8_lossy(&output.stderr);
             return Err(BombadilError::Io {
                 context: format!("cargo install --list failed: {}", stderr),
-                source: std::io::Error::new(std::io::ErrorKind::Other, stderr.to_string()),
+                source: std::io::Error::other(stderr.to_string()),
             });
         }
 
@@ -149,7 +159,11 @@ impl PackageManager for Cargo {
             })
             .collect();
 
-        debug!(manager = "cargo", count = packages.len(), "Listed installed packages");
+        debug!(
+            manager = "cargo",
+            count = packages.len(),
+            "Listed installed packages"
+        );
         Ok(packages)
     }
 }

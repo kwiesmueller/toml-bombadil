@@ -16,10 +16,7 @@ pub struct DiscoveryMethods {
 
 impl DiscoveryMethods {
     pub fn has_any(&self) -> bool {
-        self.dnf.is_some()
-            || self.apt.is_some()
-            || self.brew.is_some()
-            || self.pacman.is_some()
+        self.dnf.is_some() || self.apt.is_some() || self.brew.is_some() || self.pacman.is_some()
     }
 }
 

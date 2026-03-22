@@ -23,18 +23,27 @@ impl PackageManager for Brew {
 
     fn is_available(&self) -> bool {
         let available = command_exists("brew");
-        debug!(manager = "brew", available, "Checking package manager availability");
+        debug!(
+            manager = "brew",
+            available, "Checking package manager availability"
+        );
         available
     }
 
     fn is_installed(&self, package: &str) -> Result<bool> {
-        debug!(manager = "brew", package, "Checking if package is installed");
+        debug!(
+            manager = "brew",
+            package, "Checking if package is installed"
+        );
 
         let output = Command::new("brew")
             .args(["list", "--formula", package])
             .output()
             .map_err(|e| BombadilError::Io {
-                context: format!("Failed to check if package '{}' is installed via brew", package),
+                context: format!(
+                    "Failed to check if package '{}' is installed via brew",
+                    package
+                ),
                 source: e,
             })?;
 
@@ -46,13 +55,19 @@ impl PackageManager for Brew {
                 .args(["list", "--cask", package])
                 .output()
                 .map_err(|e| BombadilError::Io {
-                    context: format!("Failed to check if cask '{}' is installed via brew", package),
+                    context: format!(
+                        "Failed to check if cask '{}' is installed via brew",
+                        package
+                    ),
                     source: e,
                 })?;
             cask_output.status.success()
         };
 
-        debug!(manager = "brew", package, installed, "Package installation check complete");
+        debug!(
+            manager = "brew",
+            package, installed, "Package installation check complete"
+        );
         Ok(installed)
     }
 
@@ -73,7 +88,7 @@ impl PackageManager for Brew {
             return Err(BombadilError::PackageInstallFailed {
                 name: package.to_string(),
                 manager: "brew".to_string(),
-                cause: std::io::Error::new(std::io::ErrorKind::Other, stderr.to_string()),
+                cause: std::io::Error::other(stderr.to_string()),
             });
         }
 
@@ -98,7 +113,7 @@ impl PackageManager for Brew {
             return Err(BombadilError::PackageRemoveFailed {
                 name: package.to_string(),
                 manager: "brew".to_string(),
-                cause: std::io::Error::new(std::io::ErrorKind::Other, stderr.to_string()),
+                cause: std::io::Error::other(stderr.to_string()),
             });
         }
 
@@ -149,7 +164,11 @@ impl PackageManager for Brew {
             );
         }
 
-        debug!(manager = "brew", count = packages.len(), "Listed installed packages");
+        debug!(
+            manager = "brew",
+            count = packages.len(),
+            "Listed installed packages"
+        );
         Ok(packages)
     }
 }

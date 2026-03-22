@@ -81,7 +81,9 @@ impl ActionExecutor {
             });
         }
 
-        let result = match &action.action_type {
+        
+
+        match &action.action_type {
             ActionType::FileCreate {
                 target,
                 source,
@@ -139,9 +141,7 @@ impl ActionExecutor {
                     error: None,
                 })
             }
-        };
-
-        result
+        }
     }
 
     /// Execute a file create action.
@@ -236,13 +236,19 @@ impl ActionExecutor {
 
         // Remove existing target if it exists
         if target.exists() || target.symlink_metadata().is_ok() {
-            fs::remove_file(target)
-                .with_context(|| format!("Failed to remove existing target: {}", target.display()))?;
+            fs::remove_file(target).with_context(|| {
+                format!("Failed to remove existing target: {}", target.display())
+            })?;
         }
 
         // Create symlink
-        unix::fs::symlink(source, target)
-            .with_context(|| format!("Failed to create symlink: {} -> {}", source.display(), target.display()))?;
+        unix::fs::symlink(source, target).with_context(|| {
+            format!(
+                "Failed to create symlink: {} -> {}",
+                source.display(),
+                target.display()
+            )
+        })?;
 
         info!(source = ?source, target = ?target, "Created symlink");
 
@@ -289,8 +295,9 @@ impl ActionExecutor {
         // Create backup directory if needed
         if let Some(parent) = backup_location.parent() {
             if !parent.exists() {
-                fs::create_dir_all(parent)
-                    .with_context(|| format!("Failed to create backup directory: {}", parent.display()))?;
+                fs::create_dir_all(parent).with_context(|| {
+                    format!("Failed to create backup directory: {}", parent.display())
+                })?;
             }
         }
 

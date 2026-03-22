@@ -51,7 +51,10 @@ impl DriftReport {
 
     /// Detect drift in both directions: missing (config but not installed)
     /// and extra (installed but not in config).
-    pub fn detect_with_extras(config: &Config, managers: &[Box<dyn PackageManager>]) -> Result<Self> {
+    pub fn detect_with_extras(
+        config: &Config,
+        managers: &[Box<dyn PackageManager>],
+    ) -> Result<Self> {
         let managed: HashSet<String> = config.settings.packages.keys().cloned().collect();
 
         let available: Vec<&dyn PackageManager> = managers
@@ -78,10 +81,7 @@ impl DriftReport {
             }
         }
 
-        let mut extra: Vec<String> = all_installed
-            .difference(&managed)
-            .cloned()
-            .collect();
+        let mut extra: Vec<String> = all_installed.difference(&managed).cloned().collect();
         extra.sort();
 
         Ok(DriftReport { missing, extra })
@@ -95,7 +95,10 @@ impl DriftReport {
         }
 
         if !self.missing.is_empty() {
-            println!("{}", "Missing (in config but not installed):".yellow().bold());
+            println!(
+                "{}",
+                "Missing (in config but not installed):".yellow().bold()
+            );
             for name in &self.missing {
                 println!("  {} {}", "-".red(), name);
             }

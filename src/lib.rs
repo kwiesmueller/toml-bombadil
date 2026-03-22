@@ -345,7 +345,10 @@ impl Dot {
             Ok(LinkResult::Unchanged)
         } else {
             let permissions = fs::metadata(source)?.permissions();
-            let mut dot_copy = fs::OpenOptions::new().write(true).truncate(true).open(target)?;
+            let mut dot_copy = fs::OpenOptions::new()
+                .write(true)
+                .truncate(true)
+                .open(target)?;
             dot_copy.write_all(content.as_bytes())?;
             dot_copy.set_permissions(permissions)?;
             dot_copy.sync_data()?;
@@ -362,7 +365,10 @@ impl Dot {
             Ok(LinkResult::Unchanged)
         } else {
             let permissions = fs::metadata(source)?.permissions();
-            let mut dot_copy = fs::OpenOptions::new().write(true).truncate(true).open(target)?;
+            let mut dot_copy = fs::OpenOptions::new()
+                .write(true)
+                .truncate(true)
+                .open(target)?;
 
             dot_copy.write_all(&content)?;
             dot_copy.set_permissions(permissions)?;
@@ -822,392 +828,6 @@ impl Bombadil {
         }
 
         Ok(plan)
-    }
-
-    /// Execute a planned installation.
-    ///
-    /// Takes a previously created ActionPlan and executes the approved actions.
-    pub fn execute_install(&self, _plan: ActionPlan, profiles: Vec<String>) -> Result<Session> {
-        self.execute_install_with_strategy(_plan, profiles, ConflictStrategy::Interactive)
-    }
-
-    /// Execute a planned installation with a specific conflict strategy.
-    pub fn execute_install_with_strategy(
-        &self,
-        _plan: ActionPlan,
-        profiles: Vec<String>,
-        strategy: ConflictStrategy,
-    ) -> Result<Session> {
-        let dotfiles_path = self.dotfiles_absolute_path()?;
-        let storage = AuditStorage::new(&dotfiles_path);
-        storage.init()?;
-
-        let mut session = Session::new("link", profiles.clone());
-        let mut conflict_ctx = ConflictContext::new(strategy);
-
-        // Run prehooks
-        for hook in &self.prehooks {
-            match hook.run_capture() {
-                Ok(result) => {
-                    let action = crate::audit::Action::new(
-                        AuditActionType::HookExecuted {
-                            command: result.command.clone(),
-                            hook_type: crate::audit::HookType::PreInstall,
-                            exit_code: result.exit_code,
-                        },
-                        None,
-                    );
-
-                    // Save hook output as logs
-                    let log_content = format_hook_logs(&result);
-                    if !log_content.is_empty() {
-                        let _ = storage.save_logs(&action.id, &log_content);
-                    }
-
-                    session.add_action(action);
-
-                    if !result.success() {
-                        tracing::error!(
-                            command = %result.command,
-                            exit_code = result.exit_code,
-                            "Prehook failed"
-                        );
-                    }
-                }
-                Err(err) => {
-                    tracing::error!(error = %err, "Failed to run prehook");
-                }
-            }
-        }
-
-        let dot_copy_dir = self.path.join(".dots");
-        fs::create_dir_all(&dot_copy_dir)?;
-
-        // Execute each dot installation
-        for (key, dot) in self.dots.iter() {
-            // Use build_copy_path (doesn't require file to exist) for pre-check
-            let copy_path = dot.build_copy_path();
-            let target = match dot.target() {
-                Ok(t) => t,
-                Err(e) => {
-                    tracing::warn!(dot = %key, error = %e, "Skipping dot due to target error");
-                    continue;
-                }
-            };
-            let source = match dot.source() {
-                Ok(s) => s,
-                Err(e) => {
-                    tracing::warn!(dot = %key, error = %e, "Skipping dot due to source error");
-                    continue;
-                }
-            };
-
-            // Check for local modifications BEFORE rendering
-            // If target is a symlink to .dots/, the user may have modified it
-            let pre_render_content = if copy_path.exists() {
-                fs::read(&copy_path).ok()
-            } else {
-                None
-            };
-
-            // Render template
-            match dot.install(
-                &self.vars,
-                self.get_auto_ignored_files(key),
-                self.profile_enabled.as_slice(),
-            ) {
-                Err(err) => {
-                    tracing::error!(dot = %key, error = %err, "Failed to render dot");
-                    continue;
-                }
-                Ok(link_result) => {
-                    // Check if we overwrote local modifications
-                    if let Some(ref old_content) = pre_render_content {
-                        if let Ok(new_content) = fs::read(&copy_path) {
-                            if old_content != &new_content && strategy != ConflictStrategy::DotfileWins {
-                                // Content changed - user had local modifications
-                                let old_str = String::from_utf8_lossy(old_content).to_string();
-                                let new_str = String::from_utf8_lossy(&new_content).to_string();
-
-                                // Create a conflict-like prompt
-                                // Swap: system_content is what user has (will be shown as -)
-                                //       dotfile_content is new render (will be shown as +)
-                                let local_mod_conflict = Conflict {
-                                    dot_name: key.clone(),
-                                    target_path: target.clone(),
-                                    source_path: source.clone(),
-                                    rendered_path: copy_path.clone(),
-                                    dotfile_content: old_str.clone(),  // User's current (shown as -)
-                                    system_content: new_str.clone(),   // New render (shown as +)
-                                };
-
-                                let resolution = conflict_ctx.resolve(&local_mod_conflict)?;
-
-                                // Record the conflict resolution as an action
-                                let audit_resolution = match &resolution {
-                                    ConflictResolution::UseDotfile
-                                    | ConflictResolution::UseDotfileForAll => {
-                                        crate::audit::ConflictResolution::UseDotfile
-                                    }
-                                    ConflictResolution::UseSystem
-                                    | ConflictResolution::UseSystemForAll => {
-                                        crate::audit::ConflictResolution::UseSystem
-                                    }
-                                    ConflictResolution::Skip | ConflictResolution::SkipAll => {
-                                        crate::audit::ConflictResolution::KeepSystem
-                                    }
-                                };
-
-                                let conflict_action = crate::audit::Action::new(
-                                    AuditActionType::ConflictResolved {
-                                        target: target.clone(),
-                                        resolution: audit_resolution,
-                                        dotfile_hash: crate::audit::content_hash(&new_content),
-                                        system_hash: crate::audit::content_hash(old_content),
-                                    },
-                                    Some(key.clone()),
-                                );
-                                session.add_action(conflict_action);
-
-                                match resolution {
-                                    ConflictResolution::UseSystem
-                                    | ConflictResolution::UseSystemForAll => {
-                                        // Restore the user's modifications
-                                        fs::write(&copy_path, old_content)?;
-                                        tracing::info!(dot = %key, "Kept local modifications");
-                                        continue; // Skip further processing for this dot
-                                    }
-                                    ConflictResolution::Skip | ConflictResolution::SkipAll => {
-                                        // Restore and skip
-                                        fs::write(&copy_path, old_content)?;
-                                        continue;
-                                    }
-                                    _ => {
-                                        // UseDotfile - keep the new rendered content
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    // Determine action type and record
-                    let (action_type, should_symlink) = match link_result {
-                        LinkResult::Created => {
-                            let content = fs::read(&copy_path).unwrap_or_default();
-                            let hash = crate::audit::content_hash(&content);
-
-                            // Save content for revert
-                            let action = crate::audit::Action::new(
-                                AuditActionType::FileCreate {
-                                    target: target.clone(),
-                                    source: source.clone(),
-                                    content_hash: hash.clone(),
-                                },
-                                Some(key.clone()),
-                            );
-                            let _ = storage.save_after_content(&action.id, &content);
-
-                            (Some(action), true)
-                        }
-                        LinkResult::Updated => {
-                            let before = fs::read(&target).ok();
-                            let after = fs::read(&copy_path).unwrap_or_default();
-                            let before_hash = before
-                                .as_ref()
-                                .map(|b| crate::audit::content_hash(b))
-                                .unwrap_or_default();
-                            let after_hash = crate::audit::content_hash(&after);
-
-                            let action = crate::audit::Action::new(
-                                AuditActionType::FileUpdate {
-                                    target: target.clone(),
-                                    source: source.clone(),
-                                    before_hash,
-                                    after_hash,
-                                },
-                                Some(key.clone()),
-                            );
-
-                            if let Some(ref b) = before {
-                                let _ = storage.save_before_content(&action.id, b);
-                            }
-                            let _ = storage.save_after_content(&action.id, &after);
-
-                            (Some(action), true)
-                        }
-                        LinkResult::Unchanged => (None, true),
-                        LinkResult::Ignored => (None, false),
-                    };
-
-                    // Add to session
-                    if let Some(action) = action_type {
-                        session.add_action(action);
-                    }
-
-                    // Check for conflicts before symlinking
-                    let should_symlink = if should_symlink {
-                        match Conflict::detect(key, &copy_path, &target, &source) {
-                            Ok(Some(conflict)) => {
-                                let resolution = conflict_ctx.resolve(&conflict)?;
-
-                                // Record the conflict resolution
-                                let audit_resolution = match &resolution {
-                                    ConflictResolution::UseDotfile
-                                    | ConflictResolution::UseDotfileForAll => {
-                                        crate::audit::ConflictResolution::UseDotfile
-                                    }
-                                    ConflictResolution::UseSystem
-                                    | ConflictResolution::UseSystemForAll => {
-                                        crate::audit::ConflictResolution::UseSystem
-                                    }
-                                    ConflictResolution::Skip | ConflictResolution::SkipAll => {
-                                        crate::audit::ConflictResolution::KeepSystem
-                                    }
-                                };
-
-                                let dotfile_hash = fs::read(&copy_path)
-                                    .map(|c| crate::audit::content_hash(&c))
-                                    .unwrap_or_default();
-                                let system_hash = fs::read(&target)
-                                    .map(|c| crate::audit::content_hash(&c))
-                                    .unwrap_or_default();
-
-                                let conflict_action = crate::audit::Action::new(
-                                    AuditActionType::ConflictResolved {
-                                        target: target.clone(),
-                                        resolution: audit_resolution,
-                                        dotfile_hash,
-                                        system_hash,
-                                    },
-                                    Some(key.clone()),
-                                );
-                                session.add_action(conflict_action);
-
-                                match resolution {
-                                    ConflictResolution::UseDotfile
-                                    | ConflictResolution::UseDotfileForAll => {
-                                        // Backup and proceed with symlink
-                                        crate::paths::backup_and_unlink(&target)?;
-                                        true
-                                    }
-                                    ConflictResolution::UseSystem
-                                    | ConflictResolution::UseSystemForAll => {
-                                        // Copy system content back to dotfile source
-                                        conflict.apply_use_system()?;
-                                        // Re-render the dot with updated source
-                                        let _ = dot.install(
-                                            &self.vars,
-                                            self.get_auto_ignored_files(key),
-                                            self.profile_enabled.as_slice(),
-                                        );
-                                        // Now symlink (target content now matches)
-                                        crate::paths::backup_and_unlink(&target)?;
-                                        true
-                                    }
-                                    ConflictResolution::Skip | ConflictResolution::SkipAll => {
-                                        // Don't symlink, leave system file as-is
-                                        false
-                                    }
-                                }
-                            }
-                            Ok(None) => true,  // No conflict
-                            Err(e) => {
-                                tracing::warn!(dot = %key, error = %e, "Error detecting conflict");
-                                true
-                            }
-                        }
-                    } else {
-                        false
-                    };
-
-                    // Create symlink if needed
-                    if should_symlink {
-                        if let Err(e) = dot.symlink() {
-                            tracing::error!(dot = %key, error = %e, "Failed to create symlink");
-                        }
-                    }
-                }
-            }
-        }
-
-        // Print conflict summary
-        conflict_ctx.print_summary();
-
-        // Run posthooks
-        for hook in &self.posthooks {
-            match hook.run_capture() {
-                Ok(result) => {
-                    let action = crate::audit::Action::new(
-                        AuditActionType::HookExecuted {
-                            command: result.command.clone(),
-                            hook_type: crate::audit::HookType::PostInstall,
-                            exit_code: result.exit_code,
-                        },
-                        None,
-                    );
-
-                    // Save hook output as logs
-                    let log_content = format_hook_logs(&result);
-                    if !log_content.is_empty() {
-                        let _ = storage.save_logs(&action.id, &log_content);
-                    }
-
-                    session.add_action(action);
-
-                    if !result.success() {
-                        tracing::error!(
-                            command = %result.command,
-                            exit_code = result.exit_code,
-                            "Posthook failed"
-                        );
-                    }
-                }
-                Err(err) => {
-                    tracing::error!(error = %err, "Failed to run posthook");
-                }
-            }
-        }
-
-        // Clean up orphaned symlinks
-        let absolute_path_to_dot = self.dotfiles_absolute_path()?;
-        let previous_state = BombadilState::read(absolute_path_to_dot.clone());
-        let new_state = BombadilState::from(self);
-
-        if let Ok(previous_state) = previous_state {
-            let diff = previous_state.symlinks.difference(&new_state.symlinks);
-            for orphan in diff {
-                if orphan.exists() {
-                    if let Ok(canonicalized) = orphan.canonicalize() {
-                        if let Ok(()) = unlink(orphan) {
-                            if canonicalized.is_dir() {
-                                let _ = fs::remove_dir_all(&canonicalized);
-                            } else {
-                                let _ = fs::remove_file(&canonicalized);
-                            }
-
-                            session.add_action(crate::audit::Action::new(
-                                AuditActionType::SymlinkRemove {
-                                    target: orphan.clone(),
-                                    was_pointing_to: canonicalized,
-                                },
-                                None,
-                            ));
-                        }
-                    }
-                }
-            }
-        }
-
-        // Save new state
-        new_state.write()?;
-
-        // Complete and save session
-        session.complete();
-        if !session.is_empty() {
-            storage.save_session(&session)?;
-        }
-
-        Ok(session)
     }
 
     /// Execute a planned installation with options.
@@ -1816,14 +1436,6 @@ impl Bombadil {
         }
     }
 
-    /// Pretty print current bombadil variables
-    pub fn display_vars(&self) {
-        self.vars
-            .variables
-            .iter()
-            .for_each(|(key, value)| println!("{} = {}", key.red(), value))
-    }
-
     /// Enable a dotfile profile by merging its settings with the default profile
     pub fn enable_profiles(&mut self, profile_keys: Vec<&str>) -> Result<()> {
         if profile_keys.is_empty() {
@@ -1835,7 +1447,7 @@ impl Bombadil {
         let mut profiles: Vec<Profile> = profile_keys
             .iter()
             // unwrap here is safe cause allowed profile keys are checked by clap
-            .map(|profile_key| self.profiles.get(&profile_key.to_string()).unwrap())
+            .map(|profile_key| self.profiles.get(profile_key).unwrap())
             .cloned()
             .collect();
 
@@ -2039,8 +1651,8 @@ impl Bombadil {
     /// Uses `config::load_config_resolved()` for import resolution and
     /// `LoaderRegistry` for format detection.
     pub fn load(mode: Mode) -> Result<Bombadil> {
-        let config_path = config::config_path()
-            .map_err(|e| anyhow!("Failed to find config: {}", e))?;
+        let config_path =
+            config::config_path().map_err(|e| anyhow!("Failed to find config: {}", e))?;
 
         let v4_config = config::load_config_resolved(&config_path)
             .map_err(|e| anyhow!("Failed to load config: {}", e))?;
@@ -2103,28 +1715,38 @@ impl Bombadil {
             .profiles
             .iter()
             .map(|(k, p)| {
-                let v3_dots: HashMap<String, settings::dots::DotOverride> = p.dots.iter().map(|(dk, dov)| {
-                    (dk.clone(), settings::dots::DotOverride {
-                        source: dov.source.clone(),
-                        target: dov.target.clone(),
-                        ignore: dov.ignore.clone(),
-                        vars: dov.vars.clone(),
-                        hard_copy_target: dov.hard_copy_target.clone(),
-                        hard_copy_permissions: dov.hard_copy_permissions,
+                let v3_dots: HashMap<String, settings::dots::DotOverride> = p
+                    .dots
+                    .iter()
+                    .map(|(dk, dov)| {
+                        (
+                            dk.clone(),
+                            settings::dots::DotOverride {
+                                source: dov.source.clone(),
+                                target: dov.target.clone(),
+                                ignore: dov.ignore.clone(),
+                                vars: dov.vars.clone(),
+                                hard_copy_target: dov.hard_copy_target.clone(),
+                                hard_copy_permissions: dov.hard_copy_permissions,
+                            },
+                        )
                     })
-                }).collect();
+                    .collect();
 
-                (k.clone(), Profile {
-                    dots: v3_dots,
-                    packages: HashMap::new(),
-                    package_tags: p.package_tags.clone(),
-                    excluded_package_tags: p.package_exclude_tags.clone(),
-                    extra_profiles: p.extra_profiles.clone(),
-                    prehooks: p.prehooks.clone(),
-                    posthooks: p.posthooks.clone(),
-                    vars: p.vars.clone(),
-                    run_hooks_in_dotfiles_dir: p.run_hooks_in_dotfiles_dir,
-                })
+                (
+                    k.clone(),
+                    Profile {
+                        dots: v3_dots,
+                        packages: HashMap::new(),
+                        package_tags: p.package_tags.clone(),
+                        excluded_package_tags: p.package_exclude_tags.clone(),
+                        extra_profiles: p.extra_profiles.clone(),
+                        prehooks: p.prehooks.clone(),
+                        posthooks: p.posthooks.clone(),
+                        vars: p.vars.clone(),
+                        run_hooks_in_dotfiles_dir: p.run_hooks_in_dotfiles_dir,
+                    },
+                )
             })
             .collect();
 
@@ -2137,9 +1759,7 @@ impl Bombadil {
         // Build v3-compatible dots from v4 dots
         let v3_dots = v4_dots
             .iter()
-            .filter_map(|(k, d)| {
-                v3_dot_from_v4(d).map(|dot| (k.clone(), dot))
-            })
+            .filter_map(|(k, d)| v3_dot_from_v4(d).map(|dot| (k.clone(), dot)))
             .collect();
 
         Ok(Self {
@@ -2173,6 +1793,10 @@ impl Bombadil {
     ///
     /// Dispatches each dot to its configured strategy (Full, Patch, Inject, SemanticPatch).
     /// Falls back to Full strategy for simple dots.
+    ///
+    /// NOTE: Dead code — superseded by execute_install_with_options. Kept to avoid
+    /// large-block deletion complexity; will be removed in a follow-up cleanup.
+    #[allow(dead_code)]
     pub fn install_v4(&self, strategy: ConflictStrategy) -> Result<()> {
         self.check_dotfile_dir()?;
 
@@ -2189,11 +1813,8 @@ impl Bombadil {
         let conflict_ctx = ConflictContext::new(strategy);
 
         // Build tera context for rendering
-        let context = dots::render::build_context(
-            &self.v4_vars,
-            &self.v4_secrets,
-            &self.profile_enabled,
-        );
+        let context =
+            dots::render::build_context(&self.v4_vars, &self.v4_secrets, &self.profile_enabled);
 
         // Install each v4 dot using strategy dispatch
         for (key, dot) in &self.v4_dots {
@@ -2203,17 +1824,13 @@ impl Bombadil {
             let dot_context = self.build_dot_context(dot, &context);
 
             let installer: Box<dyn dots::DotInstaller> = match dot_strategy {
-                config::DotStrategy::Full => {
-                    Box::new(dots::strategy::full::FullInstaller)
-                }
-                config::DotStrategy::Patch => {
-                    Box::new(dots::strategy::patch::PatchInstaller)
-                }
-                config::DotStrategy::Inject => {
-                    Box::new(dots::strategy::inject::InjectInstaller)
-                }
+                config::DotStrategy::Full => Box::new(dots::strategy::full::FullInstaller),
+                config::DotStrategy::Patch => Box::new(dots::strategy::patch::PatchInstaller),
+                config::DotStrategy::Inject => Box::new(dots::strategy::inject::InjectInstaller),
                 config::DotStrategy::SemanticPatch => {
-                    let format = dot.target.as_ref()
+                    let format = dot
+                        .target
+                        .as_ref()
                         .map(|t| dots::strategy::semantic::SemanticInstaller::detect_format(t))
                         .unwrap_or_default();
                     Box::new(dots::strategy::semantic::SemanticInstaller::new(format))
@@ -2222,7 +1839,8 @@ impl Bombadil {
 
             match installer.install(dot, &self.dotfiles_dir, &dot_context) {
                 Ok(result) => {
-                    let (source_display, target_display) = dot_display_paths(dot, &self.dotfiles_dir);
+                    let (source_display, target_display) =
+                        dot_display_paths(dot, &self.dotfiles_dir);
                     match result {
                         dots::InstallResult::Created => {
                             println!(
@@ -2232,18 +1850,10 @@ impl Bombadil {
                             );
                         }
                         dots::InstallResult::Updated => {
-                            println!(
-                                "{} => {}",
-                                source_display.blue(),
-                                target_display.yellow()
-                            );
+                            println!("{} => {}", source_display.blue(), target_display.yellow());
                         }
                         dots::InstallResult::Unchanged => {
-                            println!(
-                                "Unchanged - {} => {}",
-                                source_display,
-                                target_display
-                            );
+                            println!("Unchanged - {} => {}", source_display, target_display);
                         }
                         dots::InstallResult::Ignored => {}
                         dots::InstallResult::Skipped => {}
@@ -2256,7 +1866,7 @@ impl Bombadil {
         }
 
         // Handle hard copy targets as post-step
-        for (_key, dot) in &self.v4_dots {
+        for dot in self.v4_dots.values() {
             if let Some(hard_copy_target) = &dot.hard_copy_target {
                 if let Some(source) = &dot.source {
                     let copy_path = self.dotfiles_dir.join(".dots").join(source);
@@ -2269,10 +1879,7 @@ impl Bombadil {
 
                         if let Some(perms) = dot.hard_copy_permissions {
                             use std::os::unix::fs::PermissionsExt;
-                            let _ = fs::set_permissions(
-                                &target,
-                                fs::Permissions::from_mode(perms),
-                            );
+                            let _ = fs::set_permissions(&target, fs::Permissions::from_mode(perms));
                         }
                     }
                 }
@@ -2318,6 +1925,8 @@ impl Bombadil {
     }
 
     /// Build a per-dot tera::Context with local vars overlaid on the base context.
+    /// NOTE: Dead code — only called by install_v4 which is itself dead code.
+    #[allow(dead_code)]
     fn build_dot_context(&self, dot: &config::Dot, base_ctx: &tera::Context) -> tera::Context {
         let mut ctx = base_ctx.clone();
 
@@ -2330,7 +1939,10 @@ impl Bombadil {
             let vars_path = if source_path.is_dir() {
                 source_path.join("vars.toml")
             } else {
-                source_path.parent().map(|p| p.join("vars.toml")).unwrap_or_default()
+                source_path
+                    .parent()
+                    .map(|p| p.join("vars.toml"))
+                    .unwrap_or_default()
             };
             if vars_path.exists() {
                 Some(vars_path)
@@ -2364,14 +1976,18 @@ impl Bombadil {
 
         if let Some(ref v4_config) = self.v4_config {
             for profile_key in &profile_keys {
-                let profile = v4_config.profiles.get(*profile_key)
+                let profile = v4_config
+                    .profiles
+                    .get(*profile_key)
                     .ok_or_else(|| anyhow!("Profile '{}' not found", profile_key))?;
 
                 // Merge dot overrides
                 for (key, dot_override) in &profile.dots {
                     if let Some(existing) = self.v4_dots.get_mut(key) {
                         apply_v4_dot_override(existing, dot_override);
-                    } else if let (Some(source), Some(target)) = (&dot_override.source, &dot_override.target) {
+                    } else if let (Some(source), Some(target)) =
+                        (&dot_override.source, &dot_override.target)
+                    {
                         // Create new dot entry from override
                         self.v4_dots.insert(
                             key.clone(),
@@ -2544,11 +2160,11 @@ fn load_var_file(
     path: &Path,
     gpg: Option<&Gpg>,
 ) -> Result<(HashMap<String, String>, HashMap<String, String>)> {
-    let content = fs::read_to_string(path)
-        .with_context(|| format!("reading var file {}", path.display()))?;
+    let content =
+        fs::read_to_string(path).with_context(|| format!("reading var file {}", path.display()))?;
 
-    let variables: HashMap<String, String> = toml::from_str(&content)
-        .with_context(|| format!("parsing var file {}", path.display()))?;
+    let variables: HashMap<String, String> =
+        toml::from_str(&content).with_context(|| format!("parsing var file {}", path.display()))?;
 
     let mut secrets = HashMap::new();
     if let Some(gpg) = gpg {
@@ -2560,12 +2176,7 @@ fn load_var_file(
                         secrets.insert(key.clone(), decrypted);
                     }
                     Err(e) => {
-                        eprintln!(
-                            "{} {}: {}",
-                            "Failed to decrypt secret".yellow(),
-                            key,
-                            e
-                        );
+                        eprintln!("{} {}: {}", "Failed to decrypt secret".yellow(), key, e);
                     }
                 }
             }
@@ -2639,10 +2250,14 @@ fn apply_v4_dot_override(dot: &mut config::Dot, overrides: &config::DotOverride)
 
 /// Extract display-friendly source and target paths from a v4 dot.
 fn dot_display_paths(dot: &config::Dot, dotfiles_dir: &Path) -> (String, String) {
-    let source_display = dot.source.as_ref()
+    let source_display = dot
+        .source
+        .as_ref()
         .map(|s| dotfiles_dir.join(s).display().to_string())
         .unwrap_or_else(|| "<no source>".to_string());
-    let target_display = dot.target.as_ref()
+    let target_display = dot
+        .target
+        .as_ref()
         .map(|t: &PathBuf| t.display().to_string())
         .unwrap_or_else(|| "<no target>".to_string());
     (source_display, target_display)
@@ -2651,12 +2266,5 @@ fn dot_display_paths(dot: &config::Dot, dotfiles_dir: &Path) -> (String, String)
 // v3 integration tests removed — superseded by tests/e2e.rs (container-based e2e).
 // Fixtures that were only used by those tests (tests/dotfiles_*) have been deleted.
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::Mode::NoGpg;
-    use speculoos::prelude::*;
-    use std::{env, fs};
-    // v3 integration tests have been removed.
-    // All CUJs are covered by the container-based e2e suite in tests/e2e.rs.
-}
+// v3 integration tests have been removed.
+// All CUJs are covered by the container-based e2e suite in tests/e2e.rs.

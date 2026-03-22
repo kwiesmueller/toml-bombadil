@@ -98,10 +98,12 @@ fn parse_ini(ini_str: &str) -> Result<Value> {
 fn serialize_ini(value: &Value) -> Result<String> {
     let mut result = String::new();
 
-    let obj = value.as_object().ok_or_else(|| BombadilError::ConfigInvalid {
-        message: "INI root must be an object".to_string(),
-        help: None,
-    })?;
+    let obj = value
+        .as_object()
+        .ok_or_else(|| BombadilError::ConfigInvalid {
+            message: "INI root must be an object".to_string(),
+            help: None,
+        })?;
 
     // Write global keys first (empty section name)
     if let Some(global) = obj.get("") {
@@ -272,7 +274,10 @@ key2 = keep_this
 "#;
 
         let mut merge = HashMap::new();
-        merge.insert("/section".to_string(), json!({"key1": "new_value", "key3": "added"}));
+        merge.insert(
+            "/section".to_string(),
+            json!({"key1": "new_value", "key3": "added"}),
+        );
 
         let patch = SemanticPatch {
             format: SemanticFormat::Ini,

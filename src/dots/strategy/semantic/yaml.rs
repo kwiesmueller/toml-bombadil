@@ -65,7 +65,10 @@ settings:
 "#;
 
         let mut merge = HashMap::new();
-        merge.insert("/settings".to_string(), json!({"theme": "dark", "fontSize": 14}));
+        merge.insert(
+            "/settings".to_string(),
+            json!({"theme": "dark", "fontSize": 14}),
+        );
 
         let patch = SemanticPatch {
             format: SemanticFormat::Yaml,

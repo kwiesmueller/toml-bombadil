@@ -47,8 +47,7 @@ impl ActionIndex {
 
     /// Save the index.
     pub fn save(&self, path: &Path) -> Result<()> {
-        let content =
-            toml::to_string_pretty(self).context("Failed to serialize action index")?;
+        let content = toml::to_string_pretty(self).context("Failed to serialize action index")?;
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).with_context(|| {
                 format!("Failed to create index directory: {}", parent.display())
@@ -208,9 +207,7 @@ impl AuditStorage {
 
     /// Check if a diff exists for an action.
     pub fn has_diff(&self, action_id: &ActionId) -> bool {
-        self.diffs_path
-            .join(format!("{}.diff", action_id))
-            .exists()
+        self.diffs_path.join(format!("{}.diff", action_id)).exists()
     }
 
     /// Save action logs.
@@ -245,8 +242,7 @@ impl AuditStorage {
         let filename = format!("{}.toml", session.id);
         let path = self.sessions_path.join(&filename);
 
-        let content =
-            toml::to_string_pretty(session).context("Failed to serialize session")?;
+        let content = toml::to_string_pretty(session).context("Failed to serialize session")?;
         fs::write(&path, content)
             .with_context(|| format!("Failed to write session: {}", path.display()))?;
 
@@ -373,7 +369,9 @@ impl AuditStorage {
         }
 
         // Fall back to legacy format (direct content in .dots/actions/content/)
-        let legacy_path = self.legacy_content_path.join(format!("{}_before", action_id));
+        let legacy_path = self
+            .legacy_content_path
+            .join(format!("{}_before", action_id));
         if legacy_path.exists() {
             return fs::read(&legacy_path).with_context(|| {
                 format!(
@@ -407,7 +405,9 @@ impl AuditStorage {
         }
 
         // Fall back to legacy format (direct content in .dots/actions/content/)
-        let legacy_path = self.legacy_content_path.join(format!("{}_after", action_id));
+        let legacy_path = self
+            .legacy_content_path
+            .join(format!("{}_after", action_id));
         if legacy_path.exists() {
             return fs::read(&legacy_path).with_context(|| {
                 format!(
@@ -433,8 +433,12 @@ impl AuditStorage {
         }
 
         // Check legacy format
-        let legacy_before = self.legacy_content_path.join(format!("{}_before", action_id));
-        let legacy_after = self.legacy_content_path.join(format!("{}_after", action_id));
+        let legacy_before = self
+            .legacy_content_path
+            .join(format!("{}_before", action_id));
+        let legacy_after = self
+            .legacy_content_path
+            .join(format!("{}_after", action_id));
         legacy_before.exists() || legacy_after.exists()
     }
 
@@ -483,8 +487,12 @@ impl AuditStorage {
             let _ = fs::remove_file(log_path);
 
             // Legacy content cleanup
-            let legacy_before = self.legacy_content_path.join(format!("{}_before", action_id));
-            let legacy_after = self.legacy_content_path.join(format!("{}_after", action_id));
+            let legacy_before = self
+                .legacy_content_path
+                .join(format!("{}_before", action_id));
+            let legacy_after = self
+                .legacy_content_path
+                .join(format!("{}_after", action_id));
             let _ = fs::remove_file(legacy_before);
             let _ = fs::remove_file(legacy_after);
         }
@@ -500,7 +508,11 @@ impl AuditStorage {
         // other actions might reference the same content (deduplication).
         // A separate gc command could be added for that purpose.
 
-        debug!(removed_sessions = removed, removed_actions = actions_to_remove.len(), "Cleaned up old sessions");
+        debug!(
+            removed_sessions = removed,
+            removed_actions = actions_to_remove.len(),
+            "Cleaned up old sessions"
+        );
         Ok(removed)
     }
 
@@ -570,7 +582,12 @@ mod tests {
         assert!(storage.logs_path.exists());
         assert!(storage.index_path.exists());
         // Object store creates its own directory
-        assert!(dir.path().join(".dots").join("audit").join("objects").exists());
+        assert!(dir
+            .path()
+            .join(".dots")
+            .join("audit")
+            .join("objects")
+            .exists());
     }
 
     #[test]
@@ -811,10 +828,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let storage = AuditStorage::new(dir.path());
 
-        assert_eq!(
-            storage.base_path(),
-            dir.path().join(".dots").join("audit")
-        );
+        assert_eq!(storage.base_path(), dir.path().join(".dots").join("audit"));
         assert_eq!(
             storage.sessions_path(),
             dir.path().join(".dots").join("audit").join("sessions")

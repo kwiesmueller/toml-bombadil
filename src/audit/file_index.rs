@@ -417,11 +417,23 @@ mod tests {
 
         index.add(
             path.clone(),
-            make_action("abc12", "session_001", timestamp, FileActionType::Create, Some("hash123")),
+            make_action(
+                "abc12",
+                "session_001",
+                timestamp,
+                FileActionType::Create,
+                Some("hash123"),
+            ),
         );
         index.add(
             path.clone(),
-            make_action("def34", "session_002", timestamp, FileActionType::Update, Some("hash456")),
+            make_action(
+                "def34",
+                "session_002",
+                timestamp,
+                FileActionType::Update,
+                Some("hash456"),
+            ),
         );
 
         // Save
@@ -453,7 +465,11 @@ mod tests {
     #[test]
     fn test_save_creates_parent_directories() -> Result<()> {
         let dir = tempdir()?;
-        let nested_path = dir.path().join("nested").join("deep").join("file_index.toml");
+        let nested_path = dir
+            .path()
+            .join("nested")
+            .join("deep")
+            .join("file_index.toml");
 
         let index = FileIndex::new();
         index.save(&nested_path)?;

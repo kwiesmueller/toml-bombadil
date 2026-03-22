@@ -143,10 +143,7 @@ pub enum ActionType {
     },
 
     /// Created a symlink.
-    SymlinkCreate {
-        source: PathBuf,
-        target: PathBuf,
-    },
+    SymlinkCreate { source: PathBuf, target: PathBuf },
 
     /// Removed a symlink.
     SymlinkRemove {
@@ -198,9 +195,7 @@ impl ActionType {
                     patches_applied.len()
                 )
             }
-            ActionType::SemanticPatch {
-                target, format, ..
-            } => {
+            ActionType::SemanticPatch { target, format, .. } => {
                 format!("Semantic patch {} ({})", target.display(), format)
             }
             ActionType::Inject { target, marker, .. } => {
@@ -226,21 +221,14 @@ impl ActionType {
             ActionType::ConflictResolved {
                 target, resolution, ..
             } => {
-                format!(
-                    "Resolve conflict for {} ({})",
-                    target.display(),
-                    resolution
-                )
+                format!("Resolve conflict for {} ({})", target.display(), resolution)
             }
             ActionType::HookExecuted {
                 command,
                 hook_type,
                 exit_code,
             } => {
-                format!(
-                    "Run {} hook '{}' (exit {})",
-                    hook_type, command, exit_code
-                )
+                format!("Run {} hook '{}' (exit {})", hook_type, command, exit_code)
             }
         }
     }
@@ -371,11 +359,7 @@ impl Action {
             .map(|p| p.to_string_lossy().to_string())
             .unwrap_or_default();
 
-        let id = ActionId::generate(
-            &timestamp,
-            action_type.type_indicator(),
-            &target_str,
-        );
+        let id = ActionId::generate(&timestamp, action_type.type_indicator(), &target_str);
 
         Self {
             id,
@@ -468,11 +452,7 @@ mod tests {
 
     #[test]
     fn test_file_ref_new() {
-        let file_ref = FileRef::new(
-            PathBuf::from("/test/file.txt"),
-            "abc123".to_string(),
-            true,
-        );
+        let file_ref = FileRef::new(PathBuf::from("/test/file.txt"), "abc123".to_string(), true);
         assert_eq!(file_ref.path, PathBuf::from("/test/file.txt"));
         assert_eq!(file_ref.content_hash, "abc123");
         assert!(file_ref.exists);

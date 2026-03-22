@@ -5,12 +5,12 @@
 //!
 //! All config loading goes through `LoaderRegistry` to keep the format pluggable.
 
-mod schema;
 pub mod loader;
+mod schema;
 pub mod toml_loader;
 
-pub use schema::*;
 pub use loader::{ConfigLoader, LoaderRegistry};
+pub use schema::*;
 
 use crate::core::{BombadilError, Result};
 use std::collections::HashSet;
@@ -182,10 +182,7 @@ pub fn resolve_dotfiles_dir(config: &Config, config_path: &Path) -> PathBuf {
         }
         None => {
             // Default: parent directory of the config file
-            config_path
-                .parent()
-                .unwrap_or(Path::new("."))
-                .to_path_buf()
+            config_path.parent().unwrap_or(Path::new(".")).to_path_buf()
         }
     }
 }
@@ -221,10 +218,7 @@ fn discover_dot_files_recursive(
         match std::fs::read_to_string(&dots_toml) {
             Ok(content) => match toml::from_str::<DotFile>(&content) {
                 Ok(dot_file) => {
-                    let rel = dir
-                        .strip_prefix(dotfiles_dir)
-                        .unwrap_or(dir)
-                        .to_path_buf();
+                    let rel = dir.strip_prefix(dotfiles_dir).unwrap_or(dir).to_path_buf();
                     debug!(path = %rel.display(), name = ?dot_file.dot.name, "discovered dots.toml");
                     results.push((rel, dot_file));
                 }
@@ -282,7 +276,7 @@ pub fn resolve_path(path: &Path) -> PathBuf {
 
     if path_str.starts_with("~/") {
         if let Some(home) = dirs::home_dir() {
-            return home.join(&path_str[2..]);
+            return home.join(path_str.strip_prefix("~/").unwrap());
         }
     }
 
@@ -521,11 +515,7 @@ name = "nvim"
 
         // .hidden/dots.toml — should be skipped
         fs::create_dir_all(root.join(".hidden")).unwrap();
-        fs::write(
-            root.join(".hidden/dots.toml"),
-            "[dot]\nname = \"hidden\"\n",
-        )
-        .unwrap();
+        fs::write(root.join(".hidden/dots.toml"), "[dot]\nname = \"hidden\"\n").unwrap();
 
         // visible/dots.toml — should be found
         fs::create_dir_all(root.join("visible")).unwrap();

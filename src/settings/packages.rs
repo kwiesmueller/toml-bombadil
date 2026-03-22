@@ -139,12 +139,16 @@ impl CargoConfig {
     pub fn package_name(&self) -> &str {
         match self {
             CargoConfig::Simple(name) => name,
-            CargoConfig::Extended { crate_name, name, bin, .. } => {
-                bin.as_deref()
-                    .or(crate_name.as_deref())
-                    .or(name.as_deref())
-                    .unwrap_or("unknown")
-            }
+            CargoConfig::Extended {
+                crate_name,
+                name,
+                bin,
+                ..
+            } => bin
+                .as_deref()
+                .or(crate_name.as_deref())
+                .or(name.as_deref())
+                .unwrap_or("unknown"),
         }
     }
 

@@ -56,24 +56,24 @@ pub mod session;
 pub mod storage;
 
 pub use action::{Action, ActionId, ActionType, ConflictResolution, HookType};
+pub use capture::{
+    deserialize_traces, format_captured_traces, serialize_traces, ActionCaptureLayer,
+    CaptureBuffer, CapturedTrace,
+};
 pub use display::{
-    format_action, format_action_details, format_action_error, format_diff,
-    format_file_action, format_file_history, format_interactive_prompt, format_planned_action,
-    format_session_log, format_traces, generate_diff_from_storage, print_interactive_help,
-    print_legend, print_plan_header, print_session_summary, prompt_execute,
-    prompt_execute_interactive, PromptResult,
+    format_action, format_action_details, format_action_error, format_diff, format_file_action,
+    format_file_history, format_interactive_prompt, format_planned_action, format_session_log,
+    format_traces, generate_diff_from_storage, print_interactive_help, print_legend,
+    print_plan_header, print_session_summary, prompt_execute, prompt_execute_interactive,
+    PromptResult,
 };
 pub use executor::{helpers, ActionExecutor, ExecutionResult};
-pub use plan::{ActionPlan, PlannedAction, PlanSummary};
+pub use file_index::{FileAction, FileActionType, FileIndex};
+pub use objects::{sha256_hash, ObjectStore};
+pub use plan::{ActionPlan, PlanSummary, PlannedAction};
 pub use revert::{
     FileRevertOptions, RevertAnalysis, RevertBlocker, RevertCheck, RevertEngine, RevertResult,
     RevertWarning,
 };
 pub use session::{Session, SessionId, SessionStats};
 pub use storage::{content_hash, ActionIndex, AuditStorage};
-pub use objects::{sha256_hash, ObjectStore};
-pub use file_index::{FileAction, FileActionType, FileIndex};
-pub use capture::{
-    deserialize_traces, format_captured_traces, serialize_traces, ActionCaptureLayer,
-    CaptureBuffer, CapturedTrace,
-};

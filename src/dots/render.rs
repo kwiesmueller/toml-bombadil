@@ -154,16 +154,22 @@ mod tests {
         let mut vars = HashMap::new();
         vars.insert("name".to_string(), "Tom".to_string());
 
-        let result = render_string(content, Path::new("test"), &vars, &HashMap::new(), &[]).unwrap();
+        let result =
+            render_string(content, Path::new("test"), &vars, &HashMap::new(), &[]).unwrap();
         assert_eq!(result, "Hello Tom!");
     }
 
     #[test]
     fn render_with_platform_vars() {
         let content = "OS: {{ os }}, Arch: {{ arch }}";
-        let result =
-            render_string(content, Path::new("test"), &HashMap::new(), &HashMap::new(), &[])
-                .unwrap();
+        let result = render_string(
+            content,
+            Path::new("test"),
+            &HashMap::new(),
+            &HashMap::new(),
+            &[],
+        )
+        .unwrap();
 
         assert!(result.contains("OS:"));
         assert!(result.contains("Arch:"));
@@ -199,7 +205,8 @@ mod tests {
         let mut vars = HashMap::new();
         vars.insert("os".to_string(), "custom_os".to_string());
 
-        let result = render_string(content, Path::new("test"), &vars, &HashMap::new(), &[]).unwrap();
+        let result =
+            render_string(content, Path::new("test"), &vars, &HashMap::new(), &[]).unwrap();
         assert_eq!(result, "custom_os");
     }
 }

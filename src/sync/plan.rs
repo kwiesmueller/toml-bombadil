@@ -6,8 +6,7 @@
 //! never at execution time.
 
 use crate::config::{
-    discover_dot_files, resolve_dotfiles_dir, load_config_resolved, DotDefinition, DotFile,
-    FileTarget, Profile,
+    discover_dot_files, load_config_resolved, resolve_dotfiles_dir, DotDefinition, Profile,
 };
 use crate::core::{BombadilError, Result};
 use indexmap::IndexMap;
@@ -59,7 +58,9 @@ impl SyncPlan {
     pub fn active_count(&self) -> usize {
         self.items
             .iter()
-            .filter(|i| !matches!(i, SyncItem::Dot(d) if matches!(d.action, DotAction::Skip { .. })))
+            .filter(
+                |i| !matches!(i, SyncItem::Dot(d) if matches!(d.action, DotAction::Skip { .. })),
+            )
             .count()
     }
 }
@@ -196,7 +197,9 @@ pub enum PackageAction {
     Install,
     AlreadyInstalled,
     /// No compatible manager available.
-    Skip { reason: String },
+    Skip {
+        reason: String,
+    },
     /// Remove (when `--prune-packages` is active).
     Prune,
 }
@@ -295,10 +298,7 @@ pub fn build_sync_plan(config_path: &Path, options: &SyncOptions) -> Result<Sync
         .filter(|(_, (_, dot_def))| is_dot_included(dot_def, &active_tags))
         .collect();
 
-    debug!(
-        included = name_to_dot.len(),
-        "dots after tag filtering"
-    );
+    debug!(included = name_to_dot.len(), "dots after tag filtering");
 
     // Topological sort
     let sorted_names = topological_sort(&name_to_dot)?;
@@ -309,7 +309,7 @@ pub fn build_sync_plan(config_path: &Path, options: &SyncOptions) -> Result<Sync
     let mut dot_actions: HashMap<String, DotAction> = HashMap::new();
 
     // Also track names that were discovered but filtered out by tags (for DependencyUnavailable)
-    let all_discovered_names: HashSet<String> = {
+    let _all_discovered_names: HashSet<String> = {
         let mut set = HashSet::new();
         for (_, dot_file) in &discovered {
             if let Some(name) = &dot_file.dot.name {
@@ -567,7 +567,7 @@ fn topological_sort(
 
 /// Check if a dot should be skipped due to missing/skipped dependencies.
 fn check_dependency_skip(
-    name: &str,
+    _name: &str,
     dot_def: &DotDefinition,
     dot_actions: &HashMap<String, DotAction>,
     name_to_dot: &IndexMap<String, (String, DotDefinition)>,
@@ -606,9 +606,9 @@ fn plan_files_for_dot(
         let target_str = target.target_path();
         let target_path = crate::config::resolve_path(std::path::Path::new(target_str));
         let is_copy = target.is_copy();
-        let hard_copy_target = target.hard_copy_target().map(|s| {
-            crate::config::resolve_path(std::path::Path::new(s))
-        });
+        let hard_copy_target = target
+            .hard_copy_target()
+            .map(|s| crate::config::resolve_path(std::path::Path::new(s)));
         let hard_copy_permissions = target.hard_copy_permissions();
 
         // Determine action based on target state
@@ -691,7 +691,7 @@ fn plan_packages_for_dot(
     active_tags: &HashSet<String>,
     dotfiles_dir: &Path,
 ) -> Vec<PlannedPackage> {
-    use crate::config::{CargoInstall, PkgManagerInstall};
+    use crate::config::CargoInstall;
     use crate::packages::managers::{
         apt::Apt, brew::Brew, cargo::Cargo, dnf::Dnf, flatpak::Flatpak, pacman::Pacman,
         PackageManager as PkgMgr,
@@ -723,9 +723,7 @@ fn plan_packages_for_dot(
     dot_def
         .packages
         .iter()
-        .filter(|(_, pkg)| {
-            pkg.tags.is_empty() || pkg.tags.iter().any(|t| active_tags.contains(t))
-        })
+        .filter(|(_, pkg)| pkg.tags.is_empty() || pkg.tags.iter().any(|t| active_tags.contains(t)))
         .map(|(canonical, pkg)| {
             // --- Try trait-based managers (dnf / apt / brew / pacman / cargo / flatpak) ---
             let resolved_mgr: Option<(&str, String, &dyn PkgMgr, Option<PathBuf>)> =
@@ -741,16 +739,12 @@ fn plan_packages_for_dot(
                                 match *mgr_name {
                                     "dnf" => {
                                         let entry = install.dnf.as_ref()?;
-                                        let repo = entry
-                                            .repo_file()
-                                            .map(|r| dotfiles_dir.join(r));
+                                        let repo = entry.repo_file().map(|r| dotfiles_dir.join(r));
                                         (Some(entry.package_name().to_string()), repo)
                                     }
                                     "apt" => {
                                         let entry = install.apt.as_ref()?;
-                                        let repo = entry
-                                            .repo_file()
-                                            .map(|r| dotfiles_dir.join(r));
+                                        let repo = entry.repo_file().map(|r| dotfiles_dir.join(r));
                                         (Some(entry.package_name().to_string()), repo)
                                     }
                                     "brew" => (
@@ -761,7 +755,10 @@ fn plan_packages_for_dot(
                                         None,
                                     ),
                                     "pacman" => (
-                                        install.pacman.as_ref().map(|e| e.package_name().to_string()),
+                                        install
+                                            .pacman
+                                            .as_ref()
+                                            .map(|e| e.package_name().to_string()),
                                         None,
                                     ),
                                     "cargo" => (
@@ -781,76 +778,79 @@ fn plan_packages_for_dot(
                 });
 
             // --- Try go ---
-            let resolved_go: Option<(String, String)> =
-                if resolved_mgr.is_none() && go_available {
-                    pkg.install
-                        .as_ref()
-                        .and_then(|i| i.go.clone())
-                        .map(|module| ("go".to_string(), module))
-                } else {
-                    None
-                };
+            let resolved_go: Option<(String, String)> = if resolved_mgr.is_none() && go_available {
+                pkg.install
+                    .as_ref()
+                    .and_then(|i| i.go.clone())
+                    .map(|module| ("go".to_string(), module))
+            } else {
+                None
+            };
 
             // --- Try binary (always "available"; is_installed = target file exists) ---
             let resolved_binary: Option<(String, String)> =
                 if resolved_mgr.is_none() && resolved_go.is_none() {
-                    pkg.install.as_ref().and_then(|i| i.binary.as_ref()).map(|b| {
-                        // Use install_dir or derive from asset_pattern as the is-installed marker.
-                        let install_name = b
-                            .install_dir
-                            .as_ref()
-                            .map(|p| p.to_string_lossy().to_string())
-                            .or_else(|| b.url.clone())
-                            .or_else(|| b.github.clone())
-                            .unwrap_or_else(|| canonical.to_string());
-                        ("binary".to_string(), install_name)
-                    })
+                    pkg.install
+                        .as_ref()
+                        .and_then(|i| i.binary.as_ref())
+                        .map(|b| {
+                            // Use install_dir or derive from asset_pattern as the is-installed marker.
+                            let install_name = b
+                                .install_dir
+                                .as_ref()
+                                .map(|p| p.to_string_lossy().to_string())
+                                .or_else(|| b.url.clone())
+                                .or_else(|| b.github.clone())
+                                .unwrap_or_else(|| canonical.to_string());
+                            ("binary".to_string(), install_name)
+                        })
                 } else {
                     None
                 };
 
             // --- Determine action ---
-            let (manager_name, install_name, repo_file, action) = if let Some((mgr_name, name, mgr, repo_file)) = resolved_mgr {
-                let action = match mgr.is_installed(&name) {
-                    Ok(true) => PackageAction::AlreadyInstalled,
-                    _ => PackageAction::Install,
-                };
-                (Some(mgr_name.to_string()), name, repo_file, action)
-            } else if let Some((mgr, name)) = resolved_go {
-                // For go packages: check if the binary derived from the module path exists.
-                let bin = name.split('/').last().unwrap_or(&name);
-                let bin = bin.split('@').next().unwrap_or(bin).to_string();
-                let is_installed = std::process::Command::new("which")
-                    .arg(&bin)
-                    .output()
-                    .map(|o| o.status.success())
-                    .unwrap_or(false);
-                let action = if is_installed {
-                    PackageAction::AlreadyInstalled
+            let (manager_name, install_name, repo_file, action) =
+                if let Some((mgr_name, name, mgr, repo_file)) = resolved_mgr {
+                    let action = match mgr.is_installed(&name) {
+                        Ok(true) => PackageAction::AlreadyInstalled,
+                        _ => PackageAction::Install,
+                    };
+                    (Some(mgr_name.to_string()), name, repo_file, action)
+                } else if let Some((mgr, name)) = resolved_go {
+                    // For go packages: check if the binary derived from the module path exists.
+                    let bin = name.split('/').next_back().unwrap_or(&name);
+                    let bin = bin.split('@').next().unwrap_or(bin).to_string();
+                    let is_installed = std::process::Command::new("which")
+                        .arg(&bin)
+                        .output()
+                        .map(|o| o.status.success())
+                        .unwrap_or(false);
+                    let action = if is_installed {
+                        PackageAction::AlreadyInstalled
+                    } else {
+                        PackageAction::Install
+                    };
+                    (Some(mgr), name, None, action)
+                } else if let Some((mgr, name)) = resolved_binary {
+                    // For binary packages: check if the target path exists.
+                    let is_installed = std::path::Path::new(&name).exists();
+                    let action = if is_installed {
+                        PackageAction::AlreadyInstalled
+                    } else {
+                        PackageAction::Install
+                    };
+                    (Some(mgr), name, None, action)
                 } else {
-                    PackageAction::Install
+                    (
+                        None,
+                        canonical.clone(),
+                        None,
+                        PackageAction::Skip {
+                            reason: "no compatible package manager available on this system"
+                                .to_string(),
+                        },
+                    )
                 };
-                (Some(mgr), name, None, action)
-            } else if let Some((mgr, name)) = resolved_binary {
-                // For binary packages: check if the target path exists.
-                let is_installed = std::path::Path::new(&name).exists();
-                let action = if is_installed {
-                    PackageAction::AlreadyInstalled
-                } else {
-                    PackageAction::Install
-                };
-                (Some(mgr), name, None, action)
-            } else {
-                (
-                    None,
-                    canonical.clone(),
-                    None,
-                    PackageAction::Skip {
-                        reason: "no compatible package manager available on this system"
-                            .to_string(),
-                    },
-                )
-            };
 
             PlannedPackage {
                 name: canonical.clone(),

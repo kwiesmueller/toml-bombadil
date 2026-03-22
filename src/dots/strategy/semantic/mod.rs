@@ -59,10 +59,13 @@ impl DotInstaller for SemanticInstaller {
         dotfiles_dir: &Path,
         _vars: &tera::Context,
     ) -> Result<InstallResult> {
-        let target = dot.target.as_ref().ok_or_else(|| BombadilError::ConfigInvalid {
-            message: "Dot missing target path".to_string(),
-            help: Some("Add a 'target' field to the dot configuration".to_string()),
-        })?;
+        let target = dot
+            .target
+            .as_ref()
+            .ok_or_else(|| BombadilError::ConfigInvalid {
+                message: "Dot missing target path".to_string(),
+                help: Some("Add a 'target' field to the dot configuration".to_string()),
+            })?;
 
         let target_path = resolve_path(target);
 
@@ -74,16 +77,14 @@ impl DotInstaller for SemanticInstaller {
         };
 
         // Load base file
-        let base_path = dot.base.as_ref()
-            .map(|p| resolve_path(p))
-            .or_else(|| {
-                // If no base specified and target exists, use target as base
-                if target_path.exists() {
-                    Some(target_path.clone())
-                } else {
-                    None
-                }
-            });
+        let base_path = dot.base.as_ref().map(|p| resolve_path(p)).or_else(|| {
+            // If no base specified and target exists, use target as base
+            if target_path.exists() {
+                Some(target_path.clone())
+            } else {
+                None
+            }
+        });
 
         let base_content = if let Some(ref base) = base_path {
             if base.exists() {
@@ -123,18 +124,25 @@ impl DotInstaller for SemanticInstaller {
         debug!(format = ?format, "Applied semantic patch");
 
         // Write to .dots directory
-        let source_name = dot.source.as_ref()
+        let source_name = dot
+            .source
+            .as_ref()
             .map(|p| p.to_string_lossy().to_string())
-            .unwrap_or_else(|| target.file_name()
-                .map(|n| n.to_string_lossy().to_string())
-                .unwrap_or_else(|| "patched".to_string()));
+            .unwrap_or_else(|| {
+                target
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_else(|| "patched".to_string())
+            });
 
         let dots_dir = dotfiles_dir.join(".dots");
         let copy_path = dots_dir.join(&source_name);
 
-        fs::create_dir_all(copy_path.parent().unwrap_or(&dots_dir)).map_err(|e| BombadilError::Io {
-            context: "creating .dots directory".to_string(),
-            source: e,
+        fs::create_dir_all(copy_path.parent().unwrap_or(&dots_dir)).map_err(|e| {
+            BombadilError::Io {
+                context: "creating .dots directory".to_string(),
+                source: e,
+            }
         })?;
 
         // Check if content changed
@@ -272,11 +280,7 @@ mod tests {
 
         // Create base JSON file
         let base_file = dir.path().join("settings.json");
-        fs::write(
-            &base_file,
-            r#"{"theme": "light", "fontSize": 12}"#,
-        )
-        .unwrap();
+        fs::write(&base_file, r#"{"theme": "light", "fontSize": 12}"#).unwrap();
 
         // Create patch spec
         let patch_file = dir.path().join("settings.patch.toml");
