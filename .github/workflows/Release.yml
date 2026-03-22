@@ -2,100 +2,45 @@ name: Release
 
 on:
   workflow_dispatch:
-    branches: main
+    inputs:
+      version:
+        description: 'Version to release (e.g. 4.0.0)'
+        required: true
 
 jobs:
   release:
-    outputs:
-      version: ${{ steps.release.outputs.version }}
+    name: Publish to crates.io
     runs-on: ubuntu-latest
-    name: Perform release
-
     steps:
-      - name: Checkout sources
-        uses: actions/checkout@v2
-        with:
-          submodules: recursive
-          fetch-depth: 0
+      - uses: actions/checkout@v4
 
       - name: Install stable toolchain
-        uses: actions-rs/toolchain@v1
-        with:
-          profile: minimal
-          toolchain: stable
-          override: true
-          components: rustfmt, clippy
+        uses: dtolnay/rust-toolchain@stable
 
-      - name: Add gpg test key pair
+      - name: Add GPG test key pair
         run: |
           gpg --import tests/gpg/public.gpg
           gpg --import tests/gpg/private.gpg
           echo -e "5\ny\n" | gpg --no-tty --command-fd 0 --expert --edit-key test@toml.bombadil.org trust
 
-      - name: Setup cargo
+      - name: Run tests
+        run: cargo test --lib
+
+      - name: Bump version
         run: |
-          cargo install cargo-bump
-          cargo login ${{ secrets.CARGO_TOKEN }}
+          cargo install cargo-edit --features vendored-openssl
+          cargo set-version ${{ github.event.inputs.version }}
 
-      # version publish steps are managed by cocogitto, see `cog.toml`
-      # and https://github.com/oknozor/cocogitto-action for more info
-      - name: Semver release
-        id: release
-        uses: oknozor/cocogitto-action@v2.1
-        with:
-          release: true
-          check-latest-tag-only: true
-
-      - name: Generate Changelog
+      - name: Commit version bump
         run: |
-          echo "::set-output name=version::${{ steps.release.outputs.version }}"
-          cog changelog --at ${{ steps.release.outputs.version }} -t full_hash > GITHUB_CHANGELOG.md
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git config user.name "github-actions[bot]"
+          git add Cargo.toml Cargo.lock
+          git commit -m "chore: release v${{ github.event.inputs.version }}"
+          git tag "v${{ github.event.inputs.version }}"
+          git push origin main --tags
 
-      - name: Upload github release
-        uses: softprops/action-gh-release@v1
-        with:
-          body_path: GITHUB_CHANGELOG.md
-          tag_name: ${{ steps.release.outputs.version }}
-
-  binary:
-    needs: release
-    name: Publish binary for ${{ matrix.os }}
-    runs-on: ${{ matrix.os }}
-    strategy:
-      matrix:
-        # This should work with only the `include`s but it currently doesn't because of this bug:
-        # https://github.community/t5/How-to-use-Git-and-GitHub/GitHub-Actions-Matrix-options-dont-work-as-documented/td-p/29558
-        target: [ x86_64-osx, x86_64-unknown-linux-musl, armv7-unknown-linux-musleabihf, armv7-linux-androideabi, aarch64-linux-android ]
-        include:
-          - os: macos-latest
-            target: x86_64-osx
-          - os: ubuntu-latest
-            target: x86_64-unknown-linux-musl
-          - os: ubuntu-latest
-            target: armv7-unknown-linux-musleabihf
-          - os: ubuntu-latest
-            target: armv7-linux-androideabi
-          - os: ubuntu-latest
-            target: aarch64-linux-android
-
-    steps:
-      - name: install open-ssl
-        if: ${{ runner.os == 'Linux' }}
-        run: |
-          sudo apt-get -y install libssl-dev pkg-config musl-dev musl-tools
-
-      - uses: hecrj/setup-rust-action@v1
-        with:
-          rust-version: stable
-
-      - uses: actions/checkout@v1
-      - name: Build
-        run: ci/action.sh release ${{ matrix.target }}
-
-      - name: Upload binaries to release
-        uses: svenstaro/upload-release-action@v1-release
-        with:
-          repo_token: ${{ secrets.GITHUB_TOKEN }}
-          file: target/tar/bombadil.tar.gz
-          tag: ${{ github.ref }}
-          asset_name: bombadil-${{needs.release.outputs.version}}-${{ matrix.target }}.tar.gz
+      - name: Publish to crates.io
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_TOKEN }}
+        run: cargo publish

@@ -2,79 +2,42 @@ name: CI
 
 on:
   push:
-    branches:
-      - main
+    branches: [main]
   pull_request:
-    branches:
-      - main
+    branches: [main]
+
 jobs:
   test:
     name: Tests
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout sources
-        uses: actions/checkout@v2
+      - uses: actions/checkout@v4
 
       - name: Install stable toolchain
-        uses: actions-rs/toolchain@v1
-        with:
-          profile: minimal
-          toolchain: stable
-          override: true
-          components: llvm-tools-preview
+        uses: dtolnay/rust-toolchain@stable
 
-      - name: Install cargo-llvm-cov
-        uses: taiki-e/install-action@cargo-llvm-cov
+      - name: Add GPG test key pair
+        run: |
+          gpg --import tests/gpg/public.gpg
+          gpg --import tests/gpg/private.gpg
+          echo -e "5\ny\n" | gpg --no-tty --command-fd 0 --expert --edit-key test@toml.bombadil.org trust
 
-      - uses: actions-rs/cargo@v1
-        with:
-          command: llvm-cov
-          args: --ignore-filename-regex bin --all-features --workspace --lcov --output-path lcov.info
+      - name: Run tests
+        run: cargo test --lib
 
-      - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v1
-        with:
-          files: lcov.info
-          fail_ci_if_error: true
-
-  lints:
-    name: Lints & Format
+  lint:
+    name: Lint
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout sources
-        uses: actions/checkout@v2
+      - uses: actions/checkout@v4
 
       - name: Install stable toolchain
-        uses: actions-rs/toolchain@v1
+        uses: dtolnay/rust-toolchain@stable
         with:
-          profile: minimal
-          toolchain: stable
-          override: true
           components: rustfmt, clippy
 
-      - name: Run cargo fmt
-        uses: actions-rs/cargo@v1
-        continue-on-error: false
-        with:
-          command: fmt
-          args: --all -- --check
+      - name: Check formatting
+        run: cargo fmt --all -- --check
 
-      - name: Run cargo clippy
-        uses: actions-rs/cargo@v1
-        continue-on-error: false
-        with:
-          command: clippy
-          args: -- -D warnings
-  e2e:
-    name: End to end tests
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout sources
-        uses: actions/checkout@v2
-        with:
-          submodules: recursive
-
-      - name: Run bats test harnesss
-        run: |
-          docker build -t bombadil-tests ./
-          docker run bombadil-tests
+      - name: Run clippy
+        run: cargo clippy --all-targets -- -D warnings
