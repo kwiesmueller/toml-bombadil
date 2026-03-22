@@ -1,0 +1,16 @@
+# v3 import: neovim dotfile settings
+[settings.dots.nvim-config]
+source = "init.lua"
+target = ".config/nvim/init.lua"
+
+[settings.dots.nvim-plugins]
+source = "plugins/"
+target = ".config/nvim/plugins/"
+
+[settings.packages.neovim]
+tags = ["editor", "cli"]
+[settings.packages.neovim.install]
+dnf = "neovim"
+apt = "neovim"
+brew = "neovim"
+cargo = "neovim"
