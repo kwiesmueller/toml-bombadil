@@ -1,12 +1,11 @@
 [package]
 name = "toml-bombadil"
 version = "4.0.0-alpha.1"
-authors = ["Paul Delafosse <paul.delafosse@protonmail.com>"]
+authors = ["Kevin Wiesmueller <kevin.wiesmueller@gmail.com>"]
 edition = "2021"
 license = "MIT"
 readme = "README.md"
-repository = "https://github.com/oknozor/toml-bombadil/"
-homepage = "https://oknozor.github.io/toml-bombadil/"
+repository = "https://github.com/kwiesmueller/toml-bombadil/"
 description = """
 A dotfile manager with patching, drift detection, and cross-platform support.
 """
@@ -25,11 +24,8 @@ thiserror = "2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
-# Error handling & logging (legacy - to be removed in v4)
 anyhow = "1"
 colored = "2"
-
-# Configuration (legacy - to be removed in v4)
 config = "0.14"
 lazy_static = "1"
 
@@ -79,9 +75,10 @@ path = "src/bin/bombadil.rs"
 required-features = ["clap"]
 
 [dev-dependencies]
-sealed_test = "1.0.0"
 speculoos = "0.11.0"
-cmd_lib = "1.3.0"
 pretty_assertions = "1.3.0"
-indoc = "2.0.1"
 tempfile = "3.10"
+# Used by gpg.rs and hook.rs tests
+sealed_test = "1.0.0"
+cmd_lib = "1.3.0"
+indoc = "2.0.1"

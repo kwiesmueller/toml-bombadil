@@ -3,7 +3,7 @@
 //! Allows users to revert individual actions by restoring the "before" state.
 //! Supports dependency-aware revert with full analysis of blockers and warnings.
 
-use super::action::{Action, ActionId, ActionType};
+use super::action::{Action, ActionId, ActionType, ConflictResolution};
 use super::file_index::{FileAction, FileIndex};
 use super::storage::AuditStorage;
 use anyhow::{Context, Result};
@@ -223,8 +223,48 @@ impl RevertEngine {
                 RevertCheck::CanRevert
             }
 
-            _ => RevertCheck::NotRevertible {
-                reason: "Action type not supported for revert".to_string(),
+            ActionType::ConflictResolved {
+                resolution,
+                backup_location,
+                source_path,
+                source_before_hash,
+                ..
+            } => match resolution {
+                ConflictResolution::UseDotfile
+                | ConflictResolution::BackupAndReplace
+                | ConflictResolution::Merged => match backup_location {
+                    Some(loc) if loc.exists() => RevertCheck::CanRevert,
+                    Some(loc) => RevertCheck::MissingContent {
+                        reason: format!("Backup no longer exists: {}", loc.display()),
+                    },
+                    None => RevertCheck::NotRevertible {
+                        reason: "No backup location was recorded for this conflict resolution"
+                            .to_string(),
+                    },
+                },
+                ConflictResolution::UseSystem | ConflictResolution::KeepSystem => {
+                    match (source_path, source_before_hash) {
+                        (Some(_), Some(hash)) if self.storage.content_exists(hash) => {
+                            RevertCheck::CanRevert
+                        }
+                        (Some(_), Some(_)) => RevertCheck::MissingContent {
+                            reason: "Dotfile source snapshot not found in object store".to_string(),
+                        },
+                        _ => RevertCheck::NotRevertible {
+                            reason: "No source path or content snapshot was recorded for this conflict resolution".to_string(),
+                        },
+                    }
+                }
+                ConflictResolution::Pending => RevertCheck::NotRevertible {
+                    reason: "Conflict was never resolved".to_string(),
+                },
+            },
+
+            ActionType::HookExecuted { command, hook_type, .. } => RevertCheck::NotRevertible {
+                reason: format!(
+                    "Hook side-effects cannot be automatically reverted (ran {} hook: {})",
+                    hook_type, command
+                ),
             },
         }
     }
@@ -309,7 +349,33 @@ impl RevertEngine {
                 format!("Restored {} from backup", original.display())
             }
 
-            _ => unreachable!(),
+            ActionType::ConflictResolved {
+                target,
+                resolution,
+                backup_location,
+                source_path,
+                ..
+            } => match resolution {
+                ConflictResolution::UseDotfile
+                | ConflictResolution::BackupAndReplace
+                | ConflictResolution::Merged => {
+                    let loc = backup_location
+                        .as_ref()
+                        .expect("backup_location verified in can_revert");
+                    self.revert_conflict_from_backup(target, loc)?;
+                    format!("Restored {} from backup at {}", target.display(), loc.display())
+                }
+                ConflictResolution::UseSystem | ConflictResolution::KeepSystem => {
+                    let src = source_path
+                        .as_ref()
+                        .expect("source_path verified in can_revert");
+                    self.revert_conflict_source(&action.id, src)?;
+                    format!("Restored dotfile source {} to pre-conflict state", src.display())
+                }
+                _ => unreachable!("Pending conflicts are not revertible"),
+            },
+
+            _ => unreachable!("Non-revertible action types are caught by can_revert()"),
         };
 
         info!(action_id = %action.id, "Reverted action");
@@ -610,6 +676,224 @@ impl RevertEngine {
         Ok(())
     }
 
+    /// Revert a conflict resolved with UseDotfile/BackupAndReplace/Merged by restoring the backup.
+    fn revert_conflict_from_backup(&self, target: &Path, backup_location: &Path) -> Result<()> {
+        debug!(target = ?target, backup = ?backup_location, "Reverting conflict resolution via backup");
+        fs::copy(backup_location, target).with_context(|| {
+            format!(
+                "Failed to restore {} from backup {}",
+                target.display(),
+                backup_location.display()
+            )
+        })?;
+        Ok(())
+    }
+
+    /// Revert a conflict resolved with UseSystem by restoring the dotfile source from snapshot.
+    fn revert_conflict_source(&self, action_id: &ActionId, source_path: &Path) -> Result<()> {
+        debug!(source = ?source_path, "Reverting conflict resolution via source restore");
+        let before_content = self.storage.load_before_content(action_id)?;
+        fs::write(source_path, before_content).with_context(|| {
+            format!(
+                "Failed to restore dotfile source: {}",
+                source_path.display()
+            )
+        })?;
+        Ok(())
+    }
+
+    /// Build RevertPlans for all actions on a file (newest first), without executing.
+    ///
+    /// Used for dry-run display of `bombadil revert --file <path>`.
+    pub fn plan_revert_file(
+        &self,
+        path: &Path,
+        to_action_id: Option<&ActionId>,
+    ) -> Result<Vec<RevertPlan>> {
+        let file_actions = match self.file_index.get(path) {
+            Some(actions) => actions.clone(),
+            None => return Ok(vec![]),
+        };
+
+        let actions_to_plan: Vec<_> = if let Some(target_id) = to_action_id {
+            self.file_index.actions_after(path, target_id)
+        } else {
+            file_actions.iter().collect()
+        };
+
+        // newest first, same order as actual revert
+        let mut reversed: Vec<_> = actions_to_plan.into_iter().collect();
+        reversed.reverse();
+
+        let mut plans = Vec::new();
+        for file_action in reversed {
+            if let Ok(Some(action)) = self.load_action(&file_action.action_id) {
+                plans.push(self.plan_revert(&action));
+            }
+        }
+        Ok(plans)
+    }
+
+    /// Build a RevertPlan describing what reverting this action would do.
+    ///
+    /// This is used for dry-run display — it shows the user exactly what operations
+    /// would be performed without actually performing them.
+    pub fn plan_revert(&self, action: &Action) -> RevertPlan {
+        let check = self.can_revert(action);
+        let can_proceed = matches!(
+            check,
+            RevertCheck::CanRevert | RevertCheck::AlreadyReverted | RevertCheck::ModifiedSinceAction { .. }
+        );
+
+        let mut warnings = Vec::new();
+        if let RevertCheck::ModifiedSinceAction { .. } = &check {
+            warnings.push("File was modified after this action. Use --force to revert anyway.".to_string());
+        }
+
+        match &action.action_type {
+            ActionType::FileCreate { target, .. } => {
+                let ops = if target.exists() {
+                    vec![RevertOperation::DeleteFile { target: target.clone() }]
+                } else {
+                    vec![RevertOperation::Noop { reason: "File no longer exists — already reverted.".to_string() }]
+                };
+                RevertPlan {
+                    action_id: action.id.clone(),
+                    action_description: action.action_type.description(),
+                    can_proceed: matches!(check, RevertCheck::CanRevert | RevertCheck::AlreadyReverted),
+                    operations: ops,
+                    warnings,
+                    manual_steps: vec![],
+                }
+            }
+
+            ActionType::FileUpdate { target, .. }
+            | ActionType::FilePatch { target, .. }
+            | ActionType::SemanticPatch { target, .. }
+            | ActionType::Inject { target, .. } => RevertPlan {
+                action_id: action.id.clone(),
+                action_description: action.action_type.description(),
+                can_proceed,
+                operations: vec![RevertOperation::RestoreFile { target: target.clone() }],
+                warnings,
+                manual_steps: vec![],
+            },
+
+            ActionType::SymlinkCreate { target, .. } => RevertPlan {
+                action_id: action.id.clone(),
+                action_description: action.action_type.description(),
+                can_proceed: matches!(check, RevertCheck::CanRevert | RevertCheck::AlreadyReverted),
+                operations: vec![RevertOperation::RemoveSymlink { target: target.clone() }],
+                warnings,
+                manual_steps: vec![],
+            },
+
+            ActionType::SymlinkRemove {
+                target,
+                was_pointing_to,
+            } => RevertPlan {
+                action_id: action.id.clone(),
+                action_description: action.action_type.description(),
+                can_proceed: matches!(check, RevertCheck::CanRevert | RevertCheck::AlreadyReverted),
+                operations: vec![RevertOperation::RecreateSymlink {
+                    target: target.clone(),
+                    pointing_to: was_pointing_to.clone(),
+                }],
+                warnings,
+                manual_steps: vec![],
+            },
+
+            ActionType::Backup {
+                original,
+                backup_location,
+                ..
+            } => RevertPlan {
+                action_id: action.id.clone(),
+                action_description: action.action_type.description(),
+                can_proceed: matches!(check, RevertCheck::CanRevert | RevertCheck::AlreadyReverted),
+                operations: vec![RevertOperation::RestoreFromActionBackup {
+                    original: original.clone(),
+                    backup_location: backup_location.clone(),
+                }],
+                warnings,
+                manual_steps: vec![],
+            },
+
+            ActionType::ConflictResolved {
+                target,
+                resolution,
+                backup_location,
+                source_path,
+                ..
+            } => {
+                let (operations, manual_steps) = match resolution {
+                    ConflictResolution::UseDotfile
+                    | ConflictResolution::BackupAndReplace
+                    | ConflictResolution::Merged => {
+                        if let Some(loc) = backup_location {
+                            (
+                                vec![RevertOperation::RestoreFromBackup {
+                                    target: target.clone(),
+                                    backup_location: loc.clone(),
+                                }],
+                                vec![],
+                            )
+                        } else {
+                            (
+                                vec![],
+                                vec!["No backup location was recorded for this conflict — cannot auto-revert.".to_string()],
+                            )
+                        }
+                    }
+                    ConflictResolution::UseSystem | ConflictResolution::KeepSystem => {
+                        if let Some(src) = source_path {
+                            (
+                                vec![RevertOperation::RestoreSource {
+                                    source_path: src.clone(),
+                                }],
+                                vec![],
+                            )
+                        } else {
+                            (
+                                vec![],
+                                vec!["No source path was recorded for this conflict — cannot auto-revert.".to_string()],
+                            )
+                        }
+                    }
+                    ConflictResolution::Pending => (
+                        vec![RevertOperation::Noop {
+                            reason: "Conflict was never resolved — nothing to revert.".to_string(),
+                        }],
+                        vec![],
+                    ),
+                };
+                RevertPlan {
+                    action_id: action.id.clone(),
+                    action_description: action.action_type.description(),
+                    can_proceed,
+                    operations,
+                    warnings,
+                    manual_steps,
+                }
+            }
+
+            ActionType::HookExecuted {
+                command, hook_type, ..
+            } => RevertPlan {
+                action_id: action.id.clone(),
+                action_description: action.action_type.description(),
+                can_proceed: false,
+                operations: vec![],
+                warnings: vec![],
+                manual_steps: vec![
+                    format!("Ran {} hook: {}", hook_type, command),
+                    "Hook side-effects cannot be automatically reverted.".to_string(),
+                    "Review the command above and undo its effects manually if needed.".to_string(),
+                ],
+            },
+        }
+    }
+
     /// Revert a backup action by restoring the backup to the original location.
     fn revert_backup(&self, original: &Path, backup_location: &Path) -> Result<()> {
         debug!(original = ?original, backup = ?backup_location, "Reverting backup");
@@ -656,6 +940,107 @@ impl RevertCheck {
             _ => false,
         }
     }
+}
+
+/// A single operation that a revert would perform.
+#[derive(Debug, Clone)]
+pub enum RevertOperation {
+    /// Restore a file to a previous state from the object store.
+    RestoreFile { target: PathBuf },
+    /// Restore a file from a backup at a known filesystem path.
+    RestoreFromBackup {
+        target: PathBuf,
+        backup_location: PathBuf,
+    },
+    /// Restore a dotfile source file in the repo from a stored snapshot.
+    RestoreSource { source_path: PathBuf },
+    /// Delete a file that was created by the action.
+    DeleteFile { target: PathBuf },
+    /// Remove a symlink that was created by the action.
+    RemoveSymlink { target: PathBuf },
+    /// Recreate a symlink that was removed by the action.
+    RecreateSymlink {
+        target: PathBuf,
+        pointing_to: PathBuf,
+    },
+    /// Restore the original file from a backup created alongside the action.
+    RestoreFromActionBackup {
+        original: PathBuf,
+        backup_location: PathBuf,
+    },
+    /// Nothing to do — action was already reverted or had no effect.
+    Noop { reason: String },
+}
+
+impl RevertOperation {
+    /// Human-readable description of this operation.
+    pub fn description(&self) -> String {
+        match self {
+            RevertOperation::RestoreFile { target } => {
+                format!("Restore {} to its previous state", target.display())
+            }
+            RevertOperation::RestoreFromBackup {
+                target,
+                backup_location,
+            } => {
+                format!(
+                    "Restore {} from backup at {}",
+                    target.display(),
+                    backup_location.display()
+                )
+            }
+            RevertOperation::RestoreSource { source_path } => {
+                format!(
+                    "Restore dotfile source {} to its pre-conflict state",
+                    source_path.display()
+                )
+            }
+            RevertOperation::DeleteFile { target } => {
+                format!("Delete {} (was created by this action)", target.display())
+            }
+            RevertOperation::RemoveSymlink { target } => {
+                format!("Remove symlink {} (was created by this action)", target.display())
+            }
+            RevertOperation::RecreateSymlink {
+                target,
+                pointing_to,
+            } => {
+                format!(
+                    "Recreate symlink {} → {} (was removed by this action)",
+                    target.display(),
+                    pointing_to.display()
+                )
+            }
+            RevertOperation::RestoreFromActionBackup {
+                original,
+                backup_location,
+            } => {
+                format!(
+                    "Restore {} from backup at {}",
+                    original.display(),
+                    backup_location.display()
+                )
+            }
+            RevertOperation::Noop { reason } => reason.clone(),
+        }
+    }
+}
+
+/// A plan describing what a revert operation would do, used for dry-run display.
+#[derive(Debug)]
+pub struct RevertPlan {
+    /// The action being reverted.
+    pub action_id: ActionId,
+    /// Human-readable description of the action.
+    pub action_description: String,
+    /// Whether the revert can proceed automatically.
+    pub can_proceed: bool,
+    /// Operations that would be performed in order.
+    pub operations: Vec<RevertOperation>,
+    /// Warnings (e.g., file was modified externally since the action).
+    pub warnings: Vec<String>,
+    /// Steps that require manual intervention (shown for non-revertible actions like hooks).
+    pub manual_steps: Vec<String>,
 }
 
 #[cfg(test)]

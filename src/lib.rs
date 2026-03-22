@@ -723,6 +723,9 @@ impl Bombadil {
                                     resolution: crate::audit::ConflictResolution::UseSystem,
                                     dotfile_hash: self.hash_file_if_exists(&source),
                                     system_hash: self.hash_file_if_exists(&target),
+                                    backup_location: None,
+                                    source_path: None,
+                                    source_before_hash: None,
                                 }
                             }
                             ConflictStrategy::Skip => {
@@ -736,6 +739,9 @@ impl Bombadil {
                                     resolution: crate::audit::ConflictResolution::Pending,
                                     dotfile_hash: self.hash_file_if_exists(&source),
                                     system_hash: self.hash_file_if_exists(&target),
+                                    backup_location: None,
+                                    source_path: None,
+                                    source_before_hash: None,
                                 }
                             }
                         }
@@ -965,6 +971,9 @@ impl Bombadil {
                                             resolution: audit_resolution,
                                             dotfile_hash: crate::audit::content_hash(&new_content),
                                             system_hash: crate::audit::content_hash(old_content),
+                                            backup_location: None,
+                                            source_path: None,
+                                            source_before_hash: None,
                                         },
                                         Some(key.clone()),
                                     );
@@ -1146,6 +1155,9 @@ impl Bombadil {
                                         resolution: audit_resolution,
                                         dotfile_hash,
                                         system_hash,
+                                        backup_location: None,
+                                        source_path: None,
+                                        source_before_hash: None,
                                     },
                                     Some(key.clone()),
                                 );
@@ -1447,7 +1459,7 @@ impl Bombadil {
         let mut profiles: Vec<Profile> = profile_keys
             .iter()
             // unwrap here is safe cause allowed profile keys are checked by clap
-            .map(|profile_key| self.profiles.get(profile_key).unwrap())
+            .map(|profile_key| self.profiles.get(*profile_key).unwrap())
             .cloned()
             .collect();
 

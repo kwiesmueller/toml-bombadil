@@ -21,9 +21,9 @@ use toml_bombadil::{Bombadil, MetadataType, Mode};
 
 // v4 imports
 use toml_bombadil::audit::{
-    format_action_details, format_file_history, format_session_log, format_traces,
-    generate_diff_from_storage, print_legend, ActionId, AuditStorage, FileRevertOptions,
-    RevertEngine,
+    format_action_details, format_file_history, format_revert_plan, format_session_log,
+    format_traces, generate_diff_from_storage, print_legend, ActionId, AuditStorage,
+    FileRevertOptions, RevertEngine,
 };
 use toml_bombadil::config::{
     generate_patch_schema, generate_schema, generate_semantic_patch_schema,
@@ -915,13 +915,23 @@ async fn main() -> Result<()> {
                 };
 
                 if dry_run {
-                    println!("{}", "Dry run - would revert actions on:".yellow());
-                    println!("  File: {}", file_path.display());
-
+                    println!("{}", "Dry run — no changes will be made.\n".yellow());
+                    println!("  File: {}", file_path.display().to_string().bold());
                     if let Some(ref to_id) = options.to_action_id {
                         println!("  To action: {}", to_id);
                     }
                     println!();
+                    let plans = engine
+                        .plan_revert_file(&file_path, options.to_action_id.as_ref())
+                        .unwrap_or_else(|err| fatal!("Failed to plan revert: {}", err));
+                    if plans.is_empty() {
+                        println!("{}", "  No actions to revert for this file.".yellow());
+                    } else {
+                        for plan in &plans {
+                            print!("{}", format_revert_plan(plan));
+                        }
+                    }
+                    return Ok(());
                 }
 
                 let results = if let Some(ref to_id) = options.to_action_id {
@@ -982,31 +992,15 @@ async fn main() -> Result<()> {
                 .expect("Action should exist in session");
 
             if dry_run {
-                println!("{}", "Dry run - would perform:".yellow());
-                println!("  Revert: {}", action.action_type.description());
-
+                println!("{}", "Dry run — no changes will be made.\n".yellow());
                 let engine = RevertEngine::new(storage);
-                let check = engine.can_revert(action);
-
-                match check {
-                    toml_bombadil::audit::RevertCheck::CanRevert => {
-                        println!("  Status: {}", "Can revert".green());
-                    }
-                    toml_bombadil::audit::RevertCheck::AlreadyReverted => {
-                        println!("  Status: {}", "Already reverted".yellow());
-                    }
-                    toml_bombadil::audit::RevertCheck::NotRevertible { reason } => {
-                        println!("  Status: {} - {}", "Cannot revert".red(), reason);
-                    }
-                    toml_bombadil::audit::RevertCheck::MissingContent { reason } => {
-                        println!("  Status: {} - {}", "Cannot revert".red(), reason);
-                    }
-                    toml_bombadil::audit::RevertCheck::ModifiedSinceAction { .. } => {
-                        println!(
-                            "  Status: {} (use --force to override)",
-                            "File modified since action".yellow()
-                        );
-                    }
+                let plan = engine.plan_revert(action);
+                print!("{}", format_revert_plan(&plan));
+                if !plan.can_proceed {
+                    println!(
+                        "\n  {}",
+                        "This action cannot be automatically reverted.".red()
+                    );
                 }
                 return Ok(());
             }

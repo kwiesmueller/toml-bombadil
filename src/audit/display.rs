@@ -6,6 +6,7 @@ use super::action::{Action, ActionType};
 use super::capture::CapturedTrace;
 use super::file_index::{FileAction, FileActionType};
 use super::plan::{ActionPlan, PlanSummary, PlannedAction};
+use super::revert::RevertPlan;
 use super::session::Session;
 use super::storage::AuditStorage;
 use colored::*;
@@ -87,6 +88,48 @@ pub fn print_session_summary(session: &Session) {
         "bombadil log".cyan(),
         "bombadil revert <id>".cyan()
     );
+}
+
+/// Format a revert plan for dry-run display.
+///
+/// Shows the user exactly what operations would be performed, any warnings,
+/// and manual steps required for non-auto-revertible actions like hooks.
+pub fn format_revert_plan(plan: &RevertPlan) -> String {
+    let mut out = String::new();
+
+    // Header line: action ID + description
+    out.push_str(&format!(
+        "  {} [{}] {}\n",
+        if plan.can_proceed {
+            "↩".cyan().bold()
+        } else {
+            "✗".red().bold()
+        },
+        plan.action_id.as_str().cyan(),
+        plan.action_description
+    ));
+
+    // Operations (what would actually happen)
+    if !plan.operations.is_empty() {
+        for op in &plan.operations {
+            out.push_str(&format!("    {} {}\n", "→".green(), op.description()));
+        }
+    }
+
+    // Warnings (e.g., file modified externally)
+    for warning in &plan.warnings {
+        out.push_str(&format!("    {} {}\n", "⚠".yellow(), warning.yellow()));
+    }
+
+    // Manual steps (shown when auto-revert is not possible)
+    if !plan.manual_steps.is_empty() {
+        out.push_str(&format!("    {}\n", "Manual action required:".yellow().bold()));
+        for step in &plan.manual_steps {
+            out.push_str(&format!("      {}\n", step));
+        }
+    }
+
+    out
 }
 
 /// Format a session for the log command.
@@ -254,12 +297,24 @@ pub fn format_action_details(action: &Action) -> String {
             resolution,
             dotfile_hash,
             system_hash,
+            backup_location,
+            source_path,
+            source_before_hash,
         } => {
             output.push_str(&format!("\n{}\n", "Details:".bold()));
             output.push_str(&format!("  Target: {}\n", target.display()));
             output.push_str(&format!("  Resolution: {}\n", resolution));
             output.push_str(&format!("  Dotfile hash: {}\n", dotfile_hash));
             output.push_str(&format!("  System hash: {}\n", system_hash));
+            if let Some(loc) = backup_location {
+                output.push_str(&format!("  Backup: {}\n", loc.display()));
+            }
+            if let Some(src) = source_path {
+                output.push_str(&format!("  Source: {}\n", src.display()));
+            }
+            if source_before_hash.is_some() {
+                output.push_str(&format!("  Revertible: {}\n", "yes (source snapshot stored)".green()));
+            }
         }
         ActionType::HookExecuted {
             command,
@@ -1244,6 +1299,9 @@ mod tests {
                 resolution: ConflictResolution::UseDotfile,
                 dotfile_hash: "dotfilehash12345".to_string(),
                 system_hash: "systemhash123456".to_string(),
+                backup_location: None,
+                source_path: None,
+                source_before_hash: None,
             },
             Some("bashrc".to_string()),
         );

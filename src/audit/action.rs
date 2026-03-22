@@ -164,6 +164,17 @@ pub enum ActionType {
         resolution: ConflictResolution,
         dotfile_hash: String,
         system_hash: String,
+        /// Where the system file was backed up (set for UseDotfile / BackupAndReplace / Merged).
+        /// Required to revert: restoring from this location undoes the conflict resolution.
+        #[serde(default)]
+        backup_location: Option<PathBuf>,
+        /// Path to the dotfile source file in the repo (set for UseSystem / KeepSystem).
+        #[serde(default)]
+        source_path: Option<PathBuf>,
+        /// Hash of the dotfile source content before it was overwritten with the system version.
+        /// Content is stored in the object store under the action ID for revert.
+        #[serde(default)]
+        source_before_hash: Option<String>,
     },
 
     /// Executed a hook command.
@@ -276,7 +287,21 @@ impl ActionType {
             | ActionType::SymlinkCreate { .. }
             | ActionType::SymlinkRemove { .. }
             | ActionType::Backup { .. } => true,
-            ActionType::ConflictResolved { .. } | ActionType::HookExecuted { .. } => false,
+            ActionType::ConflictResolved {
+                resolution,
+                backup_location,
+                source_before_hash,
+                ..
+            } => match resolution {
+                ConflictResolution::UseDotfile
+                | ConflictResolution::BackupAndReplace
+                | ConflictResolution::Merged => backup_location.is_some(),
+                ConflictResolution::UseSystem | ConflictResolution::KeepSystem => {
+                    source_before_hash.is_some()
+                }
+                ConflictResolution::Pending => false,
+            },
+            ActionType::HookExecuted { .. } => false,
         }
     }
 }

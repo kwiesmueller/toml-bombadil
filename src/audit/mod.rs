@@ -62,18 +62,18 @@ pub use capture::{
 };
 pub use display::{
     format_action, format_action_details, format_action_error, format_diff, format_file_action,
-    format_file_history, format_interactive_prompt, format_planned_action, format_session_log,
-    format_traces, generate_diff_from_storage, print_interactive_help, print_legend,
-    print_plan_header, print_session_summary, prompt_execute, prompt_execute_interactive,
-    PromptResult,
+    format_file_history, format_interactive_prompt, format_planned_action, format_revert_plan,
+    format_session_log, format_traces, generate_diff_from_storage, print_interactive_help,
+    print_legend, print_plan_header, print_session_summary, prompt_execute,
+    prompt_execute_interactive, PromptResult,
 };
 pub use executor::{helpers, ActionExecutor, ExecutionResult};
 pub use file_index::{FileAction, FileActionType, FileIndex};
 pub use objects::{sha256_hash, ObjectStore};
 pub use plan::{ActionPlan, PlanSummary, PlannedAction};
 pub use revert::{
-    FileRevertOptions, RevertAnalysis, RevertBlocker, RevertCheck, RevertEngine, RevertResult,
-    RevertWarning,
+    FileRevertOptions, RevertAnalysis, RevertBlocker, RevertCheck, RevertEngine, RevertOperation,
+    RevertPlan, RevertResult, RevertWarning,
 };
 pub use session::{Session, SessionId, SessionStats};
 pub use storage::{content_hash, ActionIndex, AuditStorage};
