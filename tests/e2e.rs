@@ -181,8 +181,14 @@ fn test_full_strategy_simple_file() {
         stderr
     );
 
-    assert!(file_exists_after_link(".config/full-simple/config.conf", None));
-    assert!(is_symlink_after_link(".config/full-simple/config.conf", None));
+    assert!(file_exists_after_link(
+        ".config/full-simple/config.conf",
+        None
+    ));
+    assert!(is_symlink_after_link(
+        ".config/full-simple/config.conf",
+        None
+    ));
 
     let content = read_file_after_link(".config/full-simple/config.conf", None);
     assert_that(&content).contains("setting_one = \"new_value\"");
@@ -193,8 +199,14 @@ fn test_full_strategy_directory() {
     let output = run_bombadil_in_container(None, "");
     assert!(output.status.success());
 
-    assert!(file_exists_after_link(".config/full-directory/file1.conf", None));
-    assert!(file_exists_after_link(".config/full-directory/file2.conf", None));
+    assert!(file_exists_after_link(
+        ".config/full-directory/file1.conf",
+        None
+    ));
+    assert!(file_exists_after_link(
+        ".config/full-directory/file2.conf",
+        None
+    ));
     assert!(file_exists_after_link(
         ".config/full-directory/subdir/nested.conf",
         None
@@ -246,7 +258,10 @@ fn test_ignore_patterns_links_non_ignored() {
     let output = run_bombadil_in_container(None, "");
     assert!(output.status.success());
 
-    assert!(file_exists_after_link(".config/ignore-demo/config.conf", None));
+    assert!(file_exists_after_link(
+        ".config/ignore-demo/config.conf",
+        None
+    ));
 }
 
 #[test]
@@ -661,7 +676,10 @@ fn test_imports_multiple_files_all_dots_linked() {
     assert!(output.status.success());
 
     // From main bombadil.toml
-    assert!(file_exists_after_link(".config/full-simple/config.conf", None));
+    assert!(file_exists_after_link(
+        ".config/full-simple/config.conf",
+        None
+    ));
     // From imports/extra-dots.toml
     assert!(file_exists_after_link(".config/imported/config.conf", None));
 }

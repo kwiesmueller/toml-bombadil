@@ -46,6 +46,7 @@ impl Gpg {
         self.decrypt(&pgp_message)
     }
 
+    #[allow(clippy::zombie_processes)]
     fn encrypt(&self, content: &str) -> Result<String> {
         let mut child = Command::new("gpg")
             .arg("--encrypt")
@@ -76,6 +77,7 @@ impl Gpg {
         }
     }
 
+    #[allow(clippy::zombie_processes)]
     fn decrypt(&self, content: &str) -> Result<String> {
         let mut child = Command::new("gpg")
             .arg("--decrypt")

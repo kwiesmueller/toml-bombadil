@@ -84,6 +84,7 @@ impl DotInstaller for FullInstaller {
 
 impl FullInstaller {
     /// Process a source path (file or directory) recursively.
+    #[allow(clippy::too_many_arguments)]
     fn process_source(
         &self,
         source: &Path,
@@ -172,6 +173,7 @@ impl FullInstaller {
     }
 
     /// Process a directory recursively.
+    #[allow(clippy::too_many_arguments)]
     fn process_directory(
         &self,
         source: &Path,
